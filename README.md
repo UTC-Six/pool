@@ -20,10 +20,68 @@
 
 ## 安装与引入
 
-将 `pool.go` 拷贝到你的项目目录下：
+假设你的 pool 包托管在 `github.com/yourorg/pool`，其它项目可这样引入：
+
+```sh
+go get github.com/yourorg/pool
+```
+
+在代码中 import：
 
 ```go
-import "path/to/pool"
+import "github.com/yourorg/pool"
+```
+
+---
+
+## 其它项目中最佳实践示例
+
+### main.go 示例
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/yourorg/pool"
+)
+
+func main() {
+    // 创建协程池
+    p := pool.NewPool(2, 10)
+    defer p.Shutdown()
+
+    // 提交普通任务
+    err := p.Submit(context.Background(), pool.PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+        fmt.Println("hello from pool")
+        return nil, nil
+    }, nil)
+    if err != nil {
+        panic(err)
+    }
+
+    // 提交带返回值任务
+    resultCh, _ := p.SubmitWithResult(context.Background(), pool.PriorityHigh, 0, func(ctx context.Context) (interface{}, error) {
+        return "result from pool", nil
+    }, nil)
+    res := <-resultCh
+    fmt.Println("result:", res.Result, "err:", res.Err)
+
+    // 获取统计信息
+    stats := p.Stats()
+    fmt.Printf("活跃worker: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
+}
+```
+
+### go.mod 示例
+```
+module yourapp
+
+go 1.20
+
+require github.com/yourorg/pool latest
 ```
 
 ---

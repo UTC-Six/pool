@@ -50,12 +50,11 @@ func (p *Pool) Submit(ctx context.Context, priority int, timeout time.Duration, 
 		return ErrPoolClosed
 	}
 	task := &Task{
-		ctx:        ctx,
-		priority:   priority,
-		timeout:    timeout,
-		taskFunc:   taskFunc,
-		recovery:   recovery,
-		resultChan: nil,
+		Priority:   priority,
+		Timeout:    timeout,
+		TaskFunc:   taskFunc,
+		Recovery:   recovery,
+		ResultChan: nil,
 	}
 	heap.Push(&p.taskQueue, task)
 	p.taskCond.Signal()
@@ -64,20 +63,19 @@ func (p *Pool) Submit(ctx context.Context, priority int, timeout time.Duration, 
 }
 
 // SubmitWithResult 提交带返回值的任务，返回结果 channel
-func (p *Pool) SubmitWithResult(ctx context.Context, priority int, timeout time.Duration, taskFunc func(ctx context.Context) (interface{}, error), recovery func(interface{})) (<-chan taskResult, error) {
+func (p *Pool) SubmitWithResult(ctx context.Context, priority int, timeout time.Duration, taskFunc func(ctx context.Context) (interface{}, error), recovery func(interface{})) (<-chan TaskResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.shutdown {
 		return nil, ErrPoolClosed
 	}
-	resultChan := make(chan taskResult, 1)
+	resultChan := make(chan TaskResult, 1)
 	task := &Task{
-		ctx:        ctx,
-		priority:   priority,
-		timeout:    timeout,
-		taskFunc:   taskFunc,
-		recovery:   recovery,
-		resultChan: resultChan,
+		Priority:   priority,
+		Timeout:    timeout,
+		TaskFunc:   taskFunc,
+		Recovery:   recovery,
+		ResultChan: resultChan,
 	}
 	heap.Push(&p.taskQueue, task)
 	p.taskCond.Signal()
@@ -104,8 +102,8 @@ func (p *Pool) startWorker() {
 			p.stats.QueuedTasks = len(p.taskQueue)
 			p.mu.Unlock()
 
-			// 处理任务
-			p.handleTask(task)
+			// 处理任务，ctx 由 Submit/SubmitWithResult 传递
+			p.handleTask(task, nil)
 
 			p.mu.Lock()
 			p.stats.ActiveWorkers--
@@ -117,22 +115,26 @@ func (p *Pool) startWorker() {
 }
 
 // handleTask 处理单个任务，支持超时、recovery
-func (p *Pool) handleTask(task *Task) {
-	ctx := task.ctx
-	if task.timeout > 0 {
+// 新增 ctx 参数，外部传递
+func (p *Pool) handleTask(task *Task, parentCtx context.Context) {
+	ctx := parentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if task.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, task.timeout)
+		ctx, cancel = context.WithTimeout(ctx, task.Timeout)
 		defer cancel()
 	}
 	defer func() {
-		if r := recover(); r != nil && task.recovery != nil {
-			task.recovery(r)
+		if r := recover(); r != nil && task.Recovery != nil {
+			task.Recovery(r)
 		}
 	}()
-	result, err := task.taskFunc(ctx)
-	if task.resultChan != nil {
-		task.resultChan <- taskResult{result: result, err: err}
-		close(task.resultChan)
+	result, err := task.TaskFunc(ctx)
+	if task.ResultChan != nil {
+		task.ResultChan <- TaskResult{Result: result, Err: err}
+		close(task.ResultChan)
 	}
 }
 
