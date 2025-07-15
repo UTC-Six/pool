@@ -203,6 +203,55 @@ p.Shutdown() // 等待所有任务完成
 
 ---
 
+## threading.GoSafe 用法示例
+
+### 1. 设置最大并发 goroutine 数
+```go
+import "yourmodule/threading"
+
+threading.SetMaxGoroutines(10) // 最多允许10个 goroutine 并发
+```
+
+### 2. 启动受控 goroutine，支持 context、错误返回
+```go
+import (
+    "context"
+    "fmt"
+    "time"
+    "yourmodule/threading"
+)
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    err := threading.GoSafe(ctx, func(ctx context.Context) error {
+        select {
+        case <-time.After(3 * time.Second):
+            fmt.Println("done")
+        case <-ctx.Done():
+            fmt.Println("timeout or cancelled")
+            return ctx.Err()
+        }
+        return nil
+    })
+    if err != nil {
+        fmt.Println("GoSafe error:", err)
+    }
+}
+```
+
+### 3. panic 自动捕获
+```go
+err := threading.GoSafe(context.Background(), func(ctx context.Context) error {
+    panic("something wrong")
+})
+if err != nil {
+    fmt.Println("panic recovered:", err)
+}
+```
+
+---
+
 ## 注意事项
 - 池关闭后再提交任务会返回 `ErrPoolClosed`
 - 任务函数内如需感知超时/取消，请监听 `ctx.Done()`
