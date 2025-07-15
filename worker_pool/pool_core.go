@@ -1,4 +1,4 @@
-package pool
+package worker_pool
 
 import (
 	"container/heap"

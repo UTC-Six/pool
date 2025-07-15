@@ -1,4 +1,4 @@
-package pool
+package worker_pool
 
 // ErrPoolClosed 表示池已关闭
 var ErrPoolClosed = &PoolError{"pool closed"}
