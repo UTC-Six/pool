@@ -1,4 +1,4 @@
-package pool
+package worker_pool
 
 // PoolStats 用于统计池的运行状态
 type PoolStats struct {
