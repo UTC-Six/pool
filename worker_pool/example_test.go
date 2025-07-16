@@ -213,34 +213,23 @@ func TestPool_Restart(t *testing.T) {
 }
 
 // 示例12：批量任务带标签和日志
-// 演示每个任务可单独设置标签（WithTag）和日志（WithLog），便于区分和追踪批量任务执行情况。
-// WithTag 用于标记任务类型，WithLog 用于记录任务执行细节。
+// 推荐用 Option 风格批量提交任务：循环调用 Submit/SubmitWithResult
 func TestPool_BatchWithTagLog(t *testing.T) {
-	// WithLogger 设置池级日志，记录池的全局事件（如创建、扩容、关闭等）
 	p := NewPool(2, WithMaxWorkers(4), WithName("batch-logger"), WithLogger(func(format string, args ...interface{}) {
 		t.Logf("[POOL] "+format, args...)
 	}))
 	defer p.Shutdown()
 
-	tasks := []BatchTaskOpt{
-		{
-			TaskFunc: func(ctx context.Context) (interface{}, error) {
-				t.Log("task 1 running")
-				return "A", nil
-			},
-			// WithTag 标记任务，WithLog 记录任务日志
-			Options: []TaskOption{WithTag("A"), WithLog(func(format string, args ...interface{}) { t.Logf("[TASK] "+format, args...) })},
-		},
-		{
-			TaskFunc: func(ctx context.Context) (interface{}, error) {
-				t.Log("task 2 running")
-				return "B", nil
-			},
-			Options: []TaskOption{WithTag("B"), WithLog(func(format string, args ...interface{}) { t.Logf("[TASK] "+format, args...) })},
-		},
+	tasks := []struct {
+		TaskFunc func(ctx context.Context) (interface{}, error)
+		Tag      string
+	}{
+		{func(ctx context.Context) (interface{}, error) { t.Log("task 1 running"); return "A", nil }, "A"},
+		{func(ctx context.Context) (interface{}, error) { t.Log("task 2 running"); return "B", nil }, "B"},
 	}
-	_ = p.BatchSubmit(context.Background(), tasks)
-	// 等待任务完成，观察日志输出
+	for _, task := range tasks {
+		_ = p.Submit(context.Background(), task.TaskFunc, WithTag(task.Tag), WithLog(func(format string, args ...interface{}) { t.Logf("[TASK] "+format, args...) }))
+	}
 	time.Sleep(100 * time.Millisecond)
 }
 
