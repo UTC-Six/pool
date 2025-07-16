@@ -45,7 +45,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/yourorg/pool"
+  "github.com/UTC-Six/pool/worker_pool"
 )
 
 func main() {
