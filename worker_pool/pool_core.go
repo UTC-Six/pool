@@ -152,7 +152,35 @@ func NewPool(minWorkers int, opts ...PoolOption) *Pool {
 	for _, opt := range opts {
 		opt(p)
 	}
+	// 初始化条件变量（Condition Variable），用于高效的任务等待与唤醒：
+	// - p.taskCond = sync.NewCond(&p.mu) 创建一个条件变量，绑定池的主锁。
+	// - 条件变量允许 worker 在任务队列为空时休眠，避免忙等浪费 CPU。
+	// - 有新任务到来时，可用 Signal/Broadcast 唤醒等待的 worker。
+	// - 并发原理：
+	//   * Wait()：worker 在无任务时调用，自动释放锁并进入等待队列，直到被唤醒。
+	//   * Signal()：唤醒一个等待的 worker，适合有新任务到来时。
+	//   * Broadcast()：唤醒所有等待的 worker，适合池关闭等全局事件。
+	//   * 所有操作都需在持有互斥锁下调用，保证并发安全。
+	// - 典型场景：池/队列/生产者-消费者模型。
+	// - 代码演示：
+	//   p.mu.Lock()
+	//   for len(p.taskQueue) == 0 && !p.shutdown {
+	//       p.taskCond.Wait() // worker 休眠等待任务
+	//   }
+	//   ... // 处理任务
+	//   p.mu.Unlock()
+	//   // 新任务到来时：
+	//   p.mu.Lock()
+	//   heap.Push(&p.taskQueue, task)
+	//   p.taskCond.Signal() // 唤醒一个 worker
+	//   p.mu.Unlock()
+	// - 最佳实践：涉及并发/超时/取消的函数，ctx 应作为第一个参数传递，便于统一管理生命周期。
 	p.taskCond = sync.NewCond(&p.mu)
+	// 初始化任务队列为堆结构，支持高效的优先级调度：
+	// - heap.Init(&p.taskQueue) 将 taskQueue 初始化为优先队列（堆），可用 heap.Push/Pop 保证每次取出/插入都是最高优先级。
+	// - 堆结构插入/取出都是 O(log n)，适合频繁调度和优先级任务。
+	// - 普通队列/数组/链表/map 无法高效支持优先级调度。
+	// - 典型场景：任务池、调度器、定时器等。
 	heap.Init(&p.taskQueue)
 	for i := 0; i < minWorkers; i++ {
 		p.startWorker()
@@ -164,6 +192,9 @@ func NewPool(minWorkers int, opts ...PoolOption) *Pool {
 }
 
 // Submit 提交一个任务到池中，支持可选参数
+// - 并发安全：全程持有锁，保证任务队列和池状态一致性
+// - ctx: 推荐作为第一个参数，便于任务取消/超时/统一管理
+// - Option: 推荐用 Option 传递可选参数，灵活扩展
 func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -185,6 +216,9 @@ func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (i
 }
 
 // SubmitWithResult 提交带返回值的任务，支持可选参数
+// - 并发安全：全程持有锁，保证任务队列和池状态一致性
+// - ctx: 推荐作为第一个参数，便于任务取消/超时/统一管理
+// - Option: 推荐用 Option 传递可选参数，灵活扩展
 func (p *Pool) SubmitWithResult(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) (<-chan TaskResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -214,9 +248,16 @@ func (p *Pool) startWorker() {
 		defer p.wg.Done()
 		for {
 			p.mu.Lock()
+			// 细粒度注释：
+			// worker主循环，若任务队列为空且未关闭，则进入条件变量等待：
+			// - Wait()会自动释放锁并将当前goroutine挂起，直到被Signal/Broadcast唤醒。
+			// - 这样可避免忙等，提升并发效率。
+			// - 唤醒后会重新获得锁，继续检查条件。
 			for len(p.taskQueue) == 0 && !p.shutdown {
-				p.taskCond.Wait()
+				p.taskCond.Wait() // 细粒度注释：高效等待，有新任务/关闭时被唤醒
 			}
+			// 细粒度注释：
+			// 如果池已关闭且队列为空，worker安全退出。
 			if p.shutdown && len(p.taskQueue) == 0 {
 				p.mu.Unlock()
 				return
@@ -275,6 +316,8 @@ func (p *Pool) handleTask(task *Task, parentCtx context.Context) {
 }
 
 // autoScale 根据任务队列长度自动扩容 worker
+// - 并发安全：需在持有锁下调用
+// - 设计动机：根据负载弹性扩容，提升资源利用率
 func (p *Pool) autoScale() {
 	if p.workers >= p.maxWorkers {
 		return
@@ -286,6 +329,8 @@ func (p *Pool) autoScale() {
 }
 
 // Stats 返回当前池的统计信息
+// - 并发安全：持有锁，保证统计数据一致性
+// - 设计动机：便于监控池运行状态
 func (p *Pool) Stats() PoolStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -297,6 +342,8 @@ func (p *Pool) Stats() PoolStats {
 }
 
 // Shutdown 关闭池，等待所有任务完成
+// - 并发安全：加锁+条件变量广播，确保所有 worker 安全退出
+// - 典型场景：服务关闭、资源释放，保证无任务丢失
 /*
 	- 该方法用于优雅关闭协程池，确保：
 	- 不再接受新任务。
@@ -343,8 +390,6 @@ func (p *Pool) Shutdown() {
 	5. 总结
 	p.taskCond.Broadcast() 的效果是：让所有等待任务的 worker 都被唤醒，及时感知到池已关闭，安全退出。
 	这是实现优雅关闭协程池的关键步骤。
-
-// 预留接口实现与扩展方法（如 SetMinWorkers、SetMaxWorkers、Restart、BatchSubmit 等）
 */
 
 // SetMinWorkers 动态设置最小 worker 数
@@ -394,5 +439,3 @@ func (p *Pool) Restart() {
 	}
 	p.mu.Unlock()
 }
-
-// Pool 实现 Pooler 接口（已是 Option 风格，无需变更）。

@@ -12,8 +12,14 @@ const (
 	PriorityHigh   = 10
 )
 
-// Task 表示一个池中要执行的任务
-// 支持优先级、超时、recovery
+// Task 表示一个池中要执行的任务，支持优先级、超时、recovery、日志、标签、钩子等扩展
+// 字段说明：
+// - Index: 用于优先队列（heap）定位任务位置，支持高效的优先级调度
+// - LogFn: 任务级日志函数，记录任务执行细节
+// - Tag: 任务标签，便于日志、监控、调试区分任务类型
+// - Before/After: 任务前后钩子，支持埋点、监控等扩展
+// - 其余字段见主流程注释
+// ctx: 推荐作为所有并发/超时/取消相关函数的第一个参数，便于统一管理生命周期
 type Task struct {
 	Priority   int
 	Timeout    time.Duration
