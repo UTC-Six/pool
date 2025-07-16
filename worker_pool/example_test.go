@@ -8,13 +8,13 @@ import (
 
 // 示例1：普通任务提交
 func TestPool_Submit(t *testing.T) {
-	p := NewPool(2, 5)
+	p := NewPool(2, WithMaxWorkers(5))
 	defer p.Shutdown()
 
-	err := p.Submit(context.Background(), PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+	err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		t.Log("hello pool")
 		return nil, nil
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,17 +22,17 @@ func TestPool_Submit(t *testing.T) {
 
 // 示例2：带超时的任务
 func TestPool_Timeout(t *testing.T) {
-	p := NewPool(1, 3)
+	p := NewPool(1, WithMaxWorkers(3))
 	defer p.Shutdown()
 
-	err := p.Submit(context.Background(), PriorityNormal, 500*time.Millisecond, func(ctx context.Context) (interface{}, error) {
+	err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		select {
 		case <-time.After(2 * time.Second):
 			return "done", nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-	}, nil)
+	}, WithTimeout(500*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,50 +40,50 @@ func TestPool_Timeout(t *testing.T) {
 
 // 示例3：高优先级任务
 func TestPool_Priority(t *testing.T) {
-	p := NewPool(1, 2)
+	p := NewPool(1, WithMaxWorkers(2))
 	defer p.Shutdown()
 
-	_ = p.Submit(context.Background(), PriorityLow, 0, func(ctx context.Context) (interface{}, error) {
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		t.Log("low priority")
 		return nil, nil
-	}, nil)
-	_ = p.Submit(context.Background(), PriorityHigh, 0, func(ctx context.Context) (interface{}, error) {
+	}, WithPriority(PriorityLow))
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		t.Log("high priority")
 		return nil, nil
-	}, nil)
+	}, WithPriority(PriorityHigh))
 	// 高优先级任务会先执行
 	// 可通过日志顺序观察
 }
 
 // 示例4：带返回值的任务
 func TestPool_WithResult(t *testing.T) {
-	p := NewPool(1, 2)
+	p := NewPool(1, WithMaxWorkers(2))
 	defer p.Shutdown()
 
-	ch, err := p.SubmitWithResult(context.Background(), PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+	ch, err := p.SubmitWithResult(context.Background(), func(ctx context.Context) (interface{}, error) {
 		return 123, nil
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := <-ch
-	if res.result != 123 || res.err != nil {
+	if res.Result != 123 || res.Err != nil {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 }
 
 // 示例5：带 recovery 的任务
 func TestPool_Recovery(t *testing.T) {
-	p := NewPool(1, 2)
+	p := NewPool(1, WithMaxWorkers(2))
 	defer p.Shutdown()
 
 	recovered := false
-	_ = p.Submit(context.Background(), PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		panic("panic in task")
-	}, func(r interface{}) {
+	}, WithRecovery(func(r interface{}) {
 		recovered = true
 		t.Logf("recovered: %v", r)
-	})
+	}))
 	time.Sleep(100 * time.Millisecond)
 	if !recovered {
 		t.Error("recovery not triggered")
@@ -92,14 +92,14 @@ func TestPool_Recovery(t *testing.T) {
 
 // 示例6：获取统计信息
 func TestPool_Stats(t *testing.T) {
-	p := NewPool(2, 4)
+	p := NewPool(2, WithMaxWorkers(4))
 	defer p.Shutdown()
 
 	for i := 0; i < 5; i++ {
-		_ = p.Submit(context.Background(), PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+		_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 			time.Sleep(50 * time.Millisecond)
 			return nil, nil
-		}, nil)
+		})
 	}
 	time.Sleep(20 * time.Millisecond)
 	stats := p.Stats()
@@ -108,13 +108,171 @@ func TestPool_Stats(t *testing.T) {
 
 // 示例7：优雅关闭池
 func TestPool_Shutdown(t *testing.T) {
-	p := NewPool(2, 4)
+	p := NewPool(2, WithMaxWorkers(4))
 	for i := 0; i < 3; i++ {
-		_ = p.Submit(context.Background(), PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+		_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 			time.Sleep(30 * time.Millisecond)
 			return nil, nil
-		}, nil)
+		})
 	}
 	p.Shutdown() // 等待所有任务完成
 	t.Log("pool shutdown gracefully")
+}
+
+// 示例8：批量提交任务（不带返回值）
+func TestPool_BatchSubmit(t *testing.T) {
+	p := NewPool(2, WithMaxWorkers(4))
+	defer p.Shutdown()
+
+	tasks := []BatchTaskOpt{
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				t.Log("batch task 1")
+				return nil, nil
+			},
+			Options: []TaskOption{WithTimeout(100 * time.Millisecond)},
+		},
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				t.Log("batch task 2")
+				return nil, nil
+			},
+			Options: []TaskOption{WithPriority(PriorityHigh)},
+		},
+	}
+	err := p.BatchSubmit(context.Background(), tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 等待任务完成
+	time.Sleep(100 * time.Millisecond)
+}
+
+// 示例9：批量提交带返回值任务
+func TestPool_BatchSubmitWithResult(t *testing.T) {
+	p := NewPool(2, WithMaxWorkers(4))
+	defer p.Shutdown()
+
+	tasks := []BatchTaskWithResultOpt{
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				return "result1", nil
+			},
+			Options: []TaskOption{WithTimeout(50 * time.Millisecond)},
+		},
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				return "result2", nil
+			},
+			Options: []TaskOption{WithPriority(PriorityLow)},
+		},
+	}
+	chs, err := p.BatchSubmitWithResult(context.Background(), tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ch := range chs {
+		res := <-ch
+		if res.Err != nil {
+			t.Errorf("task %d error: %v", i, res.Err)
+		} else {
+			t.Logf("task %d result: %v", i, res.Result)
+		}
+	}
+}
+
+// 示例10：动态调整最小/最大worker
+func TestPool_SetMinMaxWorkers(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(2))
+	defer p.Shutdown()
+
+	p.SetMinWorkers(3)
+	if p.minWorkers != 3 {
+		t.Errorf("expected minWorkers=3, got %d", p.minWorkers)
+	}
+	p.SetMaxWorkers(5)
+	if p.maxWorkers != 5 {
+		t.Errorf("expected maxWorkers=5, got %d", p.maxWorkers)
+	}
+}
+
+// 示例11：池重启
+func TestPool_Restart(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(2))
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+		t.Log("before shutdown")
+		return nil, nil
+	})
+	p.Shutdown()
+	p.Restart()
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+		t.Log("after restart")
+		return nil, nil
+	})
+	p.Shutdown()
+}
+
+// 示例12：批量任务带标签和日志
+// 演示每个任务可单独设置标签（WithTag）和日志（WithLog），便于区分和追踪批量任务执行情况。
+// WithTag 用于标记任务类型，WithLog 用于记录任务执行细节。
+func TestPool_BatchWithTagLog(t *testing.T) {
+	// WithLogger 设置池级日志，记录池的全局事件（如创建、扩容、关闭等）
+	p := NewPool(2, WithMaxWorkers(4), WithName("batch-logger"), WithLogger(func(format string, args ...interface{}) {
+		t.Logf("[POOL] "+format, args...)
+	}))
+	defer p.Shutdown()
+
+	tasks := []BatchTaskOpt{
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				t.Log("task 1 running")
+				return "A", nil
+			},
+			// WithTag 标记任务，WithLog 记录任务日志
+			Options: []TaskOption{WithTag("A"), WithLog(func(format string, args ...interface{}) { t.Logf("[TASK] "+format, args...) })},
+		},
+		{
+			TaskFunc: func(ctx context.Context) (interface{}, error) {
+				t.Log("task 2 running")
+				return "B", nil
+			},
+			Options: []TaskOption{WithTag("B"), WithLog(func(format string, args ...interface{}) { t.Logf("[TASK] "+format, args...) })},
+		},
+	}
+	_ = p.BatchSubmit(context.Background(), tasks)
+	// 等待任务完成，观察日志输出
+	time.Sleep(100 * time.Millisecond)
+}
+
+// 示例13：任务前后钩子
+// 演示 WithBefore/WithAfter 可在任务执行前后自动执行自定义逻辑，常用于埋点、监控等场景。
+func TestPool_TaskHooks(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(2))
+	defer p.Shutdown()
+
+	beforeCalled, afterCalled := false, false
+	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+		t.Log("main task running")
+		return nil, nil
+	}, WithBefore(func() { beforeCalled = true; t.Log("before hook") }), WithAfter(func() { afterCalled = true; t.Log("after hook") }))
+	time.Sleep(50 * time.Millisecond)
+	if !beforeCalled || !afterCalled {
+		t.Errorf("hooks not called: before=%v, after=%v", beforeCalled, afterCalled)
+	}
+}
+
+// 示例14：动态调整最小/最大worker
+// 演示运行时动态调整池的 min/max worker，适合弹性伸缩场景。
+func TestPool_DynamicResize(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(2), WithName("dyn"))
+	defer p.Shutdown()
+
+	p.SetMinWorkers(3) // 动态扩容
+	if p.minWorkers != 3 {
+		t.Errorf("expected minWorkers=3, got %d", p.minWorkers)
+	}
+	p.SetMaxWorkers(5) // 动态调整最大
+	if p.maxWorkers != 5 {
+		t.Errorf("expected maxWorkers=5, got %d", p.maxWorkers)
+	}
 }
