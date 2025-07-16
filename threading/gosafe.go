@@ -31,7 +31,15 @@ func SetMaxGoroutines(n int) {
 	maxGoroutines = n
 }
 
-// GoSafeOption 和 goSafeConfig 用于可选参数配置
+// goSafeConfig 用于 GoSafe 的可选参数配置
+// 字段说明：
+// - maxGoroutines: 本次 GoSafe 的最大并发数，支持临时并发限制
+// - recovery: panic 恢复处理函数
+// - logFn: goroutine 级日志函数，记录执行细节
+// - tag: goroutine 标签，便于日志、监控、调试
+// - before/after: goroutine 前后钩子，支持埋点、监控等扩展
+// - name/logger: 命名和全局日志，便于分组和全局事件追踪
+// - ctx: 推荐作为所有并发/超时/取消相关函数的第一个参数，便于统一管理生命周期
 type GoSafeOption func(*goSafeConfig)
 type goSafeConfig struct {
 	maxGoroutines int
@@ -91,7 +99,14 @@ func WithLogger(logger func(format string, args ...interface{})) GoSafeOption {
 	}
 }
 
-// GoSafe 启动受控 goroutine，支持 context、panic recovery，返回详细 error
+// GoSafe 启动受控 goroutine，支持 context、panic recovery、日志、标签、钩子等扩展
+// - 并发原理：通过信号量（sem/semLocal）限制最大并发数，防止 goroutine 爆炸
+// - Option: 推荐用 Option 传递可选参数，灵活扩展
+// - ctx: 推荐作为第一个参数，便于统一管理生命周期、超时、取消
+// - panic 恢复：defer+recover，支持自定义处理
+// - before/after: 支持 goroutine 执行前后自动扩展逻辑
+// - logFn/tag: 支持每个 goroutine 独立日志和标签，便于追踪
+// - name/logger: 支持全局命名和日志，便于分组和全局事件追踪
 func GoSafe(ctx context.Context, fn func(ctx context.Context) error, opts ...GoSafeOption) error {
 	cfg := goSafeConfig{
 		maxGoroutines: maxGoroutines,

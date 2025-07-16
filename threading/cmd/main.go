@@ -37,7 +37,12 @@ func main() {
 		}
 	}
 
-	// 批量任务示例，推荐用 Option 风格批量提交 goroutine、设置钩子、日志、标签等参数，详见下方示例。
+	// 推荐用 Option 风格批量提交 goroutine、设置钩子、日志、标签等参数，详见下方示例。
+	// - ctx: 推荐作为第一个参数，便于统一管理生命周期、超时、取消
+	// - Option: 推荐用 Option 传递可选参数，灵活扩展
+	// - before/after: 支持 goroutine 执行前后自动扩展逻辑
+	// - logFn/tag: 支持每个 goroutine 独立日志和标签，便于追踪
+	// - name/logger: 支持全局命名和日志，便于分组和全局事件追踪
 	tasks := []struct {
 		TaskFunc func(ctx context.Context) error
 		Tag      string
