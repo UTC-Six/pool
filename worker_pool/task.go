@@ -21,6 +21,10 @@ type Task struct {
 	Recovery   func(interface{})
 	ResultChan chan TaskResult
 	Index      int
+	LogFn      func(format string, args ...interface{})
+	Tag        string
+	Before     func()
+	After      func()
 }
 
 // TaskResult 用于封装任务执行结果
