@@ -50,25 +50,23 @@ func main() {
 		fmt.Println("[worker_pool] recovered from:", r)
 	}))
 
-	// 批量提交任务，带标签和日志
-	// 每个任务可单独设置 WithTag（任务标签）和 WithLog（任务日志），便于区分和追踪批量任务执行情况。
-	tasks := []worker_pool.BatchTaskOpt{
-		{
-			TaskFunc: func(ctx context.Context) (interface{}, error) {
-				fmt.Println("[worker_pool] batch task 1 running")
-				return "A", nil
-			},
-			Options: []worker_pool.TaskOption{worker_pool.WithTag("A"), worker_pool.WithLog(func(format string, args ...interface{}) { fmt.Printf("[TASK] "+format+"\n", args...) })},
-		},
-		{
-			TaskFunc: func(ctx context.Context) (interface{}, error) {
-				fmt.Println("[worker_pool] batch task 2 running")
-				return "B", nil
-			},
-			Options: []worker_pool.TaskOption{worker_pool.WithTag("B"), worker_pool.WithLog(func(format string, args ...interface{}) { fmt.Printf("[TASK] "+format+"\n", args...) })},
-		},
+	// 批量提交任务，推荐用 Option 风格循环调用 Submit
+	tasks := []struct {
+		TaskFunc func(ctx context.Context) (interface{}, error)
+		Tag      string
+	}{
+		{func(ctx context.Context) (interface{}, error) {
+			fmt.Println("[worker_pool] batch task 1 running")
+			return "A", nil
+		}, "A"},
+		{func(ctx context.Context) (interface{}, error) {
+			fmt.Println("[worker_pool] batch task 2 running")
+			return "B", nil
+		}, "B"},
 	}
-	_ = p.BatchSubmit(context.Background(), tasks)
+	for _, task := range tasks {
+		_ = p.Submit(context.Background(), task.TaskFunc, worker_pool.WithTag(task.Tag), worker_pool.WithLog(func(format string, args ...interface{}) { fmt.Printf("[TASK] "+format+"\n", args...) }))
+	}
 
 	// 任务前后钩子
 	// WithBefore/WithAfter 可在任务执行前后自动执行自定义逻辑，常用于埋点、监控等场景。

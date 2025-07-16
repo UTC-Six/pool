@@ -37,14 +37,16 @@ func main() {
 		}
 	}
 
-	// 批量任务示例
-	// 每个 goroutine 可单独设置 WithTag（任务标签）和 WithLog（任务日志），便于区分和追踪批量任务执行情况。
-	for i := 0; i < 3; i++ {
-		idx := i
-		_ = threading.GoSafe(ctx, func(ctx context.Context) error {
-			fmt.Printf("[threading] batch task %d running\n", idx)
-			return nil
-		}, threading.WithTag(fmt.Sprintf("batch-%d", idx)), threading.WithLog(func(format string, args ...interface{}) { fmt.Printf("[BATCH-TASK] "+format+"\n", args...) }))
+	// 批量任务示例，推荐用 Option 风格批量提交 goroutine、设置钩子、日志、标签等参数，详见下方示例。
+	tasks := []struct {
+		TaskFunc func(ctx context.Context) error
+		Tag      string
+	}{
+		{func(ctx context.Context) error { fmt.Println("[threading] batch task 1 running"); return nil }, "batch-1"},
+		{func(ctx context.Context) error { fmt.Println("[threading] batch task 2 running"); return nil }, "batch-2"},
+	}
+	for _, task := range tasks {
+		_ = threading.GoSafe(ctx, task.TaskFunc, threading.WithTag(task.Tag), threading.WithLog(func(format string, args ...interface{}) { fmt.Printf("[BATCH-TASK] "+format+"\n", args...) }))
 	}
 
 	// 任务前后钩子
