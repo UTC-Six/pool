@@ -56,3 +56,82 @@ func (pq *taskPriorityQueue) Pop() interface{} {
 	*pq = old[0 : n-1]
 	return t
 }
+
+// TaskOption 用于配置 Task 的可选参数
+type TaskOption func(*Task)
+
+// WithTimeout 设置任务超时时间
+func WithTimeout(timeout time.Duration) TaskOption {
+	return func(t *Task) {
+		t.Timeout = timeout
+	}
+}
+
+// WithPriority 设置任务优先级
+func WithPriority(priority int) TaskOption {
+	return func(t *Task) {
+		t.Priority = priority
+	}
+}
+
+// WithRecovery 设置任务的 panic 恢复处理
+func WithRecovery(recovery func(interface{})) TaskOption {
+	return func(t *Task) {
+		t.Recovery = recovery
+	}
+}
+
+// WithLog 设置任务的日志函数
+// 说明：任务级日志，每次提交任务时单独设置，记录该任务的执行细节（如开始、结束、异常等）。
+// 用法示例：
+//
+//	_ = p.Submit(ctx, func(ctx context.Context) (interface{}, error) { ... },
+//	    WithLog(func(format string, args ...interface{}) {
+//	        fmt.Printf("[TASK-LOG] "+format+"\n", args...)
+//	    }),
+//	    WithTag("sync-job"))
+//
+// 输出示例：
+//
+//	[TASK-LOG] [Task] start tag=sync-job
+//	[TASK-LOG] [Task] end tag=sync-job
+//	[TASK-LOG] [Task] panic recovered: panic info, tag=sync-job
+func WithLog(logFn func(format string, args ...interface{})) TaskOption {
+	return func(t *Task) {
+		t.LogFn = logFn
+	}
+}
+
+// WithTag 设置任务标签
+// 说明：为单个任务打上自定义标签，便于日志、监控、调试时区分不同任务。常与 WithLog 配合使用。
+// 用法示例：
+//
+//	_ = p.Submit(ctx, func(ctx context.Context) (interface{}, error) { ... },
+//	    WithTag("order-sync"),
+//	    WithLog(func(format string, args ...interface{}) {
+//	        fmt.Printf("[TASK][order-sync] "+format+"\n", args...)
+//	    }))
+//
+// 输出示例：
+//
+//	[TASK][order-sync] [Task] start tag=order-sync
+//	[TASK][order-sync] [Task] end tag=order-sync
+func WithTag(tag string) TaskOption {
+	return func(t *Task) {
+		t.Tag = tag
+	}
+}
+
+// WithBefore 设置任务前置钩子
+func WithBefore(before func()) TaskOption {
+	return func(t *Task) {
+		t.Before = before
+	}
+}
+
+// WithAfter 设置任务后置钩子
+func WithAfter(after func()) TaskOption {
+	return func(t *Task) {
+		t.After = after
+	}
+}
