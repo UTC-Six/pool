@@ -222,7 +222,28 @@ import "yourmodule/threading"
 threading.SetMaxGoroutines(10) // 最多允许10个 goroutine 并发
 ```
 
-### 2. 启动受控 goroutine，支持 context、错误返回
+### 2. 启动受控 goroutine（无 ctx 版本，支持 WithTimeout）
+```go
+import (
+    "fmt"
+    "time"
+    "yourmodule/threading"
+)
+
+func main() {
+    err := threading.GoSafe(func() error {
+        fmt.Println("GoSafe 无 ctx 任务开始")
+        time.Sleep(1 * time.Second)
+        fmt.Println("GoSafe 无 ctx 任务结束")
+        return nil
+    }, threading.WithTimeout(1500*time.Millisecond))
+    if err != nil {
+        fmt.Println("GoSafe error:", err)
+    }
+}
+```
+
+### 3. 启动受控 goroutine（带 ctx 版本，支持外部 context 控制）
 ```go
 import (
     "context"
@@ -234,18 +255,19 @@ import (
 func main() {
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
     defer cancel()
-    err := threading.GoSafe(ctx, func(ctx context.Context) error {
+    err := threading.GoSafeCtx(ctx, func(ctx context.Context) error {
+        fmt.Println("GoSafeCtx 任务开始")
         select {
         case <-time.After(3 * time.Second):
-            fmt.Println("done")
+            fmt.Println("GoSafeCtx 正常完成")
         case <-ctx.Done():
-            fmt.Println("timeout or cancelled")
+            fmt.Println("GoSafeCtx 超时/取消:", ctx.Err())
             return ctx.Err()
         }
         return nil
     })
     if err != nil {
-        fmt.Println("GoSafe error:", err)
+        fmt.Println("GoSafeCtx error:", err)
     }
 }
 ```

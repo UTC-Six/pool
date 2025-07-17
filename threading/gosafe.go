@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 var (
@@ -42,6 +43,7 @@ type goSafeConfig struct {
 	after         func()
 	name          string
 	logger        func(format string, args ...interface{})
+	timeout       time.Duration // 新增：可选超时
 }
 
 // WithMaxGoroutines 临时设置本次 GoSafe 的最大并发 goroutine 数
@@ -91,8 +93,32 @@ func WithLogger(logger func(format string, args ...interface{})) GoSafeOption {
 	}
 }
 
-// GoSafe 启动受控 goroutine，支持 context、panic recovery、日志、标签、钩子等扩展
-func GoSafe(ctx context.Context, fn func(ctx context.Context) error, opts ...GoSafeOption) error {
+// WithTimeout 设置本次 GoSafe 的超时时间（仅 GoSafe 有效，GoSafeCtx 请直接传 context）
+func WithTimeout(timeout time.Duration) GoSafeOption {
+	return func(cfg *goSafeConfig) {
+		cfg.timeout = timeout
+	}
+}
+
+// GoSafe 启动受控 goroutine（无 ctx 版本），支持 WithTimeout
+func GoSafe(fn func() error, opts ...GoSafeOption) error {
+	cfg := goSafeConfig{
+		maxGoroutines: maxGoroutines,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	var ctx context.Context = context.Background()
+	var cancel context.CancelFunc
+	if cfg.timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, cfg.timeout)
+		defer cancel()
+	}
+	return GoSafeCtx(ctx, func(_ context.Context) error { return fn() }, opts...)
+}
+
+// GoSafeCtx 启动受控 goroutine
+func GoSafeCtx(ctx context.Context, fn func(ctx context.Context) error, opts ...GoSafeOption) error {
 	cfg := goSafeConfig{
 		maxGoroutines: maxGoroutines,
 	}
