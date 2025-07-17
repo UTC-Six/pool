@@ -1,296 +1,112 @@
-# pool 协程池
+# pool —— 高性能 Go 协程池与并发控制工具集
 
 ## 项目简介
 
-`pool` 是一个高性能、可扩展的 Go 协程池，支持任务优先级、自动扩容、任务超时、父 context 复用、panic recovery、统计信息等特性，适用于高并发场景下对 goroutine 管理有严格要求的业务。
+**pool** 是一套专为高并发场景设计的 Go 协程池与并发控制工具集，包含两个核心包：
+
+- **worker_pool**：功能强大的协程池，支持任务优先级、自动扩容、任务超时、panic recovery、实时统计等特性，适用于需要精细化 goroutine 管理的复杂业务场景。
+- **threading**：极简高效的 goroutine 并发控制工具，支持最大并发数限制、超时、panic 自动捕获、钩子、标签、日志等，适合轻量级并发任务的受控启动。
+
+本项目致力于为 Go 开发者提供**安全、灵活、易用**的并发基础设施，助力你在高并发、资源敏感、任务复杂的业务中游刃有余。
 
 ---
 
-## 主要特性
-- **最大/最小 worker 数可控**，自动扩容
-- **任务优先级调度**，高优先级任务优先执行
-- **任务超时自动取消**，支持 context 继承
-- **panic recovery**，防止异常导致池崩溃
-- **协程安全**，多 goroutine 并发安全
-- **支持带返回值任务**
-- **实时统计信息**，活跃 worker、排队任务、已完成任务数
-- **优雅关闭**，等待所有任务完成
+## 适用场景
+
+### worker_pool —— 专业协程池
+
+适用于：
+- **高并发任务调度**：如批量数据处理、爬虫、消息消费、批量 API 调用等。
+- **任务优先级调度**：需要区分高低优先级任务，保证关键任务优先执行。
+- **任务超时与取消**：每个任务可独立设置超时，防止“僵尸”任务拖垮系统。
+- **资源受限环境**：如服务端、微服务、云函数等，需严格控制 goroutine 数量。
+- **任务执行统计与监控**：实时获取活跃 worker、排队任务、已完成任务数，便于监控与调优。
+- **优雅关闭与重启**：支持池的优雅关闭与重启，适合服务热升级、平滑重启场景。
+
+**特色功能**：
+- 自动扩容与弹性收缩
+- 任务优先级队列
+- 任务级超时与 panic recovery
+- 任务前后钩子、日志、标签
+- 实时池状态统计
+- 线程安全，接口简洁
+
+### threading —— 轻量级并发控制
+
+适用于：
+- **简单并发任务受控启动**：如批量异步请求、并发 I/O、定时任务等。
+- **全局/临时最大并发数限制**：防止 goroutine 爆炸，保护下游服务。
+- **需要超时、取消、panic 自动捕获的场景**：如网络请求、外部服务调用等。
+- **需要任务级别日志、标签、钩子的场景**：便于追踪和监控每个 goroutine 的生命周期。
+
+**特色功能**：
+- 一行代码限制最大并发 goroutine 数
+- 支持全局和临时并发上限
+- 支持 WithTimeout、WithRecovery、WithTag、WithLog、WithBefore/After 等丰富 Option
+- 支持 context 透传，灵活控制生命周期
+- panic 自动捕获，防止服务崩溃
+- 适合轻量、无池化需求的并发场景
 
 ---
 
-## 安装与引入
+## 推荐用法
 
-假设你的 pool 包托管在 `github.com/yourorg/pool`，其它项目可这样引入：
-
-```sh
-go get github.com/yourorg/pool
-```
-
-在代码中 import：
+### worker_pool 示例
 
 ```go
-import "github.com/yourorg/pool"
-```
+p := worker_pool.NewPool(2, worker_pool.WithMaxWorkers(10))
+defer p.Shutdown()
 
----
-
-## 其它项目中最佳实践示例
-
-### main.go 示例
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "time"
-
-  "github.com/UTC-Six/pool/worker_pool"
-)
-
-func main() {
-    // 创建协程池
-    p := worker_pool.NewPool(2, worker_pool.WithMaxWorkers(10))
-    defer p.Shutdown()
-
-    // 提交普通任务
-    err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-        fmt.Println("hello from pool")
-        return nil, nil
-    })
-    if err != nil {
-        panic(err)
-    }
-
-    // 提交带返回值任务
-    resultCh, _ := p.SubmitWithResult(context.Background(), func(ctx context.Context) (interface{}, error) {
-        return "result from pool", nil
-    }, worker_pool.WithPriority(worker_pool.PriorityHigh))
-    res := <-resultCh
-    fmt.Println("result:", res.Result, "err:", res.Err)
-
-    // 获取统计信息
-    stats := p.Stats()
-    fmt.Printf("活跃worker: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
-
-    // 动态调整
-    p.SetMinWorkers(3)
-    p.SetMaxWorkers(6)
-    stats = p.Stats()
-    fmt.Printf("[worker_pool] 动态调整后: min=%d, max=%d, active=%d, queued=%d\n", stats.MinWorkers, stats.MaxWorkers, stats.ActiveWorkers, stats.QueuedTasks)
-}
-```
-
-### go.mod 示例
-```
-module yourapp
-
-go 1.20
-
-require github.com/yourorg/pool latest
-```
-
----
-
-## 结构与主要接口说明
-
-### Pool 结构体
-
-```
-type Pool struct {
-    // ...
-}
-```
-- `NewPool(minWorkers int, opts ...PoolOption) *Pool`  
-  创建协程池，指定最小和最大 worker 数。
-- `Submit(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) error`  
-  提交任务，支持优先级、超时、recovery。
-- `SubmitWithResult(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) (<-chan TaskResult, error)`  
-  提交带返回值任务。
-- `Stats() PoolStats`  
-  获取池的统计信息。
-- `Shutdown()`  
-  关闭池，等待所有任务完成。
-
-### Task 结构体
-
-```
-type Task struct {
-    Ctx        context.Context
-    Priority   int
-    Timeout    time.Duration
-    TaskFunc   func(ctx context.Context) (interface{}, error)
-    Recovery   func(interface{})
-    ResultChan chan TaskResult
-    Index      int
-    LogFn      func(format string, args ...interface{})
-    Tag        string
-    Before     func()
-    After      func()
-}
-```
-
-### PoolStats 结构体
-
-```
-type PoolStats struct {
-    ActiveWorkers int // 当前活跃 worker 数
-    QueuedTasks   int // 排队任务数
-    Completed     int // 已完成任务数
-}
-```
-
-### 错误
-- `ErrPoolClosed`：池已关闭时提交任务会返回该错误
-
----
-
-## 典型用法示例
-
-### 1. 创建协程池
-```go
-p := worker_pool.NewPool(2, worker_pool.WithMaxWorkers(10)) // 最小2，最大10个worker
-```
-
-### 2. 提交普通任务
-```go
-err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-    // 你的任务逻辑
-    fmt.Println("hello pool")
-    return nil, nil
-})
-```
-
-### 3. 提交带超时的任务
-```go
-err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-    select {
-    case <-time.After(3 * time.Second):
-        fmt.Println("done")
-    case <-ctx.Done():
-        fmt.Println("timeout or cancelled")
-    }
-    return nil, nil
-}, worker_pool.WithTimeout(2*time.Second))
-```
-
-### 4. 提交高优先级任务
-```go
+// 提交带优先级和超时的任务
 _ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-    fmt.Println("high priority task")
+    // 任务逻辑
     return nil, nil
-}, worker_pool.WithPriority(worker_pool.PriorityHigh))
-```
+}, worker_pool.WithPriority(worker_pool.PriorityHigh), worker_pool.WithTimeout(2*time.Second))
 
-### 5. 提交带返回值的任务
-```go
-resultCh, _ := p.SubmitWithResult(context.Background(), func(ctx context.Context) (interface{}, error) {
-    return 42, nil
-})
-res := <-resultCh
-fmt.Println(res.Result, res.Err)
-```
-
-### 6. 提交带 recovery 的任务
-```go
-_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-    panic("something wrong")
-}, worker_pool.WithRecovery(func(r interface{}) {
-    fmt.Println("recovered from:", r)
-}))
-```
-
-### 7. 获取统计信息
-```go
+// 获取池状态
 stats := p.Stats()
-fmt.Printf("活跃worker: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
+fmt.Printf("活跃: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
 ```
 
-### 8. 优雅关闭池
+### threading 示例
+
 ```go
-p.Shutdown() // 等待所有任务完成
+threading.SetMaxGoroutines(5) // 全局最大并发5
+
+// 无 ctx 版本，支持 WithTimeout
+err := threading.GoSafe(func() error {
+    // 任务逻辑
+    return nil
+}, threading.WithTimeout(1*time.Second), threading.WithTag("job1"))
+
+// 带 ctx 版本，支持外部取消
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+err = threading.GoSafeCtx(ctx, func(ctx context.Context) error {
+    // 任务逻辑
+    return nil
+}, threading.WithLog(func(format string, args ...interface{}) { fmt.Printf(format, args...) }))
 ```
 
 ---
 
-## threading.GoSafe 用法示例
+## 为什么选择 pool？
 
-### 1. 设置最大并发 goroutine 数
-```go
-import "yourmodule/threading"
-
-threading.SetMaxGoroutines(10) // 最多允许10个 goroutine 并发
-```
-
-### 2. 启动受控 goroutine（无 ctx 版本，支持 WithTimeout）
-```go
-import (
-    "fmt"
-    "time"
-    "yourmodule/threading"
-)
-
-func main() {
-    err := threading.GoSafe(func() error {
-        fmt.Println("GoSafe 无 ctx 任务开始")
-        time.Sleep(1 * time.Second)
-        fmt.Println("GoSafe 无 ctx 任务结束")
-        return nil
-    }, threading.WithTimeout(1500*time.Millisecond))
-    if err != nil {
-        fmt.Println("GoSafe error:", err)
-    }
-}
-```
-
-### 3. 启动受控 goroutine（带 ctx 版本，支持外部 context 控制）
-```go
-import (
-    "context"
-    "fmt"
-    "time"
-    "yourmodule/threading"
-)
-
-func main() {
-    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-    defer cancel()
-    err := threading.GoSafeCtx(ctx, func(ctx context.Context) error {
-        fmt.Println("GoSafeCtx 任务开始")
-        select {
-        case <-time.After(3 * time.Second):
-            fmt.Println("GoSafeCtx 正常完成")
-        case <-ctx.Done():
-            fmt.Println("GoSafeCtx 超时/取消:", ctx.Err())
-            return ctx.Err()
-        }
-        return nil
-    })
-    if err != nil {
-        fmt.Println("GoSafeCtx error:", err)
-    }
-}
-```
-
-### 3. panic 自动捕获
-```go
-err := threading.GoSafe(context.Background(), func(ctx context.Context) error {
-    panic("something wrong")
-})
-if err != nil {
-    fmt.Println("panic recovered:", err)
-}
-```
+- **极致性能**：底层实现高效，最大化资源利用率。
+- **灵活易用**：Option 风格配置，API 简洁，易于集成。
+- **安全可靠**：panic 自动捕获，任务超时、取消、优雅关闭，保障服务稳定。
+- **可观测性强**：实时统计、任务日志、标签、钩子，便于监控和调优。
+- **适用广泛**：既能满足高阶池化需求，也能覆盖轻量级并发场景。
 
 ---
 
-## 注意事项
-- 池关闭后再提交任务会返回 `ErrPoolClosed`
-- 任务函数内如需感知超时/取消，请监听 `ctx.Done()`
-- 自动扩容策略可根据业务需求调整
-- 任务优先级为整数，数值越大优先级越高
+## 立即体验
+
+欢迎 star、fork、issue、PR！  
+让 pool 成为你 Go 并发开发的得力助手！
+
+GitHub 地址：https://github.com/UTC-Six/pool
 
 ---
 
-## 贡献与反馈
-如有建议、bug 或需求，欢迎 issue 或 PR。 
+如需定制化支持或有建议，欢迎联系作者或提交 issue！ 
