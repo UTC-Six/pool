@@ -195,6 +195,7 @@ func NewPool(minWorkers int, opts ...PoolOption) *Pool {
 // - 并发安全：全程持有锁，保证任务队列和池状态一致性
 // - ctx: 推荐作为第一个参数，便于任务取消/超时/统一管理
 // - Option: 推荐用 Option 传递可选参数，灵活扩展
+// - 默认超时时间：3秒，业务可用 WithTimeout 覆盖
 func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -202,8 +203,8 @@ func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (i
 		return ErrPoolClosed
 	}
 	task := &Task{
-		Priority: PriorityNormal, // 默认
-		Timeout:  0,              // 默认
+		Priority: PriorityNormal,     // 默认
+		Timeout:  DefaultTaskTimeout, // 默认超时3秒，业务可覆盖
 		TaskFunc: taskFunc,
 	}
 	for _, opt := range opts {
@@ -219,6 +220,7 @@ func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (i
 // - 并发安全：全程持有锁，保证任务队列和池状态一致性
 // - ctx: 推荐作为第一个参数，便于任务取消/超时/统一管理
 // - Option: 推荐用 Option 传递可选参数，灵活扩展
+// - 默认超时时间：3秒，业务可用 WithTimeout 覆盖
 func (p *Pool) SubmitWithResult(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) (<-chan TaskResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -228,7 +230,7 @@ func (p *Pool) SubmitWithResult(ctx context.Context, taskFunc func(ctx context.C
 	resultChan := make(chan TaskResult, 1)
 	task := &Task{
 		Priority:   PriorityNormal,
-		Timeout:    0,
+		Timeout:    DefaultTaskTimeout, // 默认超时3秒，业务可覆盖
 		TaskFunc:   taskFunc,
 		ResultChan: resultChan,
 	}
@@ -439,3 +441,6 @@ func (p *Pool) Restart() {
 	}
 	p.mu.Unlock()
 }
+
+// 默认任务超时时间（可被 WithTimeout 覆盖）
+const DefaultTaskTimeout = 3 * time.Second // 默认3秒，业务可覆盖
