@@ -36,35 +36,7 @@ func NewPool(minWorkers int, opts ...PoolOption) *Pool {
 	for _, opt := range opts {
 		opt(p)
 	}
-	// 初始化条件变量（Condition Variable），用于高效的任务等待与唤醒：
-	// - p.taskCond = sync.NewCond(&p.mu) 创建一个条件变量，绑定池的主锁。
-	// - 条件变量允许 worker 在任务队列为空时休眠，避免忙等浪费 CPU。
-	// - 有新任务到来时，可用 Signal/Broadcast 唤醒等待的 worker。
-	// - 并发原理：
-	//   * Wait()：worker 在无任务时调用，自动释放锁并进入等待队列，直到被唤醒。
-	//   * Signal()：唤醒一个等待的 worker，适合有新任务到来时。
-	//   * Broadcast()：唤醒所有等待的 worker，适合池关闭等全局事件。
-	//   * 所有操作都需在持有互斥锁下调用，保证并发安全。
-	// - 典型场景：池/队列/生产者-消费者模型。
-	// - 代码演示：
-	//   p.mu.Lock()
-	//   for len(p.taskQueue) == 0 && !p.shutdown {
-	//       p.taskCond.Wait() // worker 休眠等待任务
-	//   }
-	//   ... // 处理任务
-	//   p.mu.Unlock()
-	//   // 新任务到来时：
-	//   p.mu.Lock()
-	//   heap.Push(&p.taskQueue, task)
-	//   p.taskCond.Signal() // 唤醒一个 worker
-	//   p.mu.Unlock()
-	// - 最佳实践：涉及并发/超时/取消的函数，ctx 应作为第一个参数传递，便于统一管理生命周期。
 	p.taskCond = sync.NewCond(&p.mu)
-	// 初始化任务队列为堆结构，支持高效的优先级调度：
-	// - heap.Init(&p.taskQueue) 将 taskQueue 初始化为优先队列（堆），可用 heap.Push/Pop 保证每次取出/插入都是最高优先级。
-	// - 堆结构插入/取出都是 O(log n)，适合频繁调度和优先级任务。
-	// - 普通队列/数组/链表/map 无法高效支持优先级调度。
-	// - 典型场景：任务池、调度器、定时器等。
 	heap.Init(&p.taskQueue)
 	for i := 0; i < minWorkers; i++ {
 		p.startWorker()
@@ -96,16 +68,6 @@ func WithName(name string) PoolOption {
 }
 
 // WithLogger 设置池的日志函数
-// 说明：池级日志，仅在创建 Pool 时设置一次，记录池的全局事件（如创建、扩容、关闭等）。
-// 用法示例：
-//
-//	p := NewPool(2, WithMaxWorkers(4), WithName("my-pool"), WithLogger(func(format string, args ...interface{}) {
-//	    fmt.Printf("[POOL-LOG] "+format+"\n", args...)
-//	}))
-//
-// 输出示例：
-//
-//	[POOL-LOG] Pool my-pool created with min=2, max=4
 func WithLogger(logger func(format string, args ...interface{})) PoolOption {
 	return func(p *Pool) {
 		p.logger = logger
@@ -127,6 +89,7 @@ func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (i
 		Priority: PriorityNormal,     // 默认
 		Timeout:  DefaultTaskTimeout, // 默认超时3秒，业务可覆盖
 		TaskFunc: taskFunc,
+		Ctx:      ctx, // 新增
 	}
 	for _, opt := range opts {
 		opt(task)
@@ -154,6 +117,7 @@ func (p *Pool) SubmitWithResult(ctx context.Context, taskFunc func(ctx context.C
 		Timeout:    DefaultTaskTimeout, // 默认超时3秒，业务可覆盖
 		TaskFunc:   taskFunc,
 		ResultChan: resultChan,
+		Ctx:        ctx, // 新增
 	}
 	for _, opt := range opts {
 		opt(task)
@@ -171,16 +135,9 @@ func (p *Pool) startWorker() {
 		defer p.wg.Done()
 		for {
 			p.mu.Lock()
-			// 细粒度注释：
-			// worker主循环，若任务队列为空且未关闭，则进入条件变量等待：
-			// - Wait()会自动释放锁并将当前goroutine挂起，直到被Signal/Broadcast唤醒。
-			// - 这样可避免忙等，提升并发效率。
-			// - 唤醒后会重新获得锁，继续检查条件。
 			for len(p.taskQueue) == 0 && !p.shutdown {
-				p.taskCond.Wait() // 细粒度注释：高效等待，有新任务/关闭时被唤醒
+				p.taskCond.Wait()
 			}
-			// 细粒度注释：
-			// 如果池已关闭且队列为空，worker安全退出。
 			if p.shutdown && len(p.taskQueue) == 0 {
 				p.mu.Unlock()
 				return
@@ -190,8 +147,8 @@ func (p *Pool) startWorker() {
 			p.stats.QueuedTasks = len(p.taskQueue)
 			p.mu.Unlock()
 
-			// 处理任务，ctx 由 Submit/SubmitWithResult 传递
-			p.handleTask(task, nil)
+			// 处理任务，ctx 由 Task.Ctx 传递
+			p.handleTask(task.Ctx, task)
 
 			p.mu.Lock()
 			p.stats.ActiveWorkers--
@@ -202,10 +159,8 @@ func (p *Pool) startWorker() {
 	}()
 }
 
-// handleTask 处理单个任务，支持超时、recovery
-// 新增 ctx 参数，外部传递
-func (p *Pool) handleTask(task *Task, parentCtx context.Context) {
-	ctx := parentCtx
+// handleTask 处理单个任务，ctx 作为第一个参数
+func (p *Pool) handleTask(ctx context.Context, task *Task) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

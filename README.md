@@ -50,22 +50,22 @@ import (
 
 func main() {
     // 创建协程池
-    p := pool.NewPool(2, 10)
+    p := worker_pool.NewPool(2, worker_pool.WithMaxWorkers(10))
     defer p.Shutdown()
 
     // 提交普通任务
-    err := p.Submit(context.Background(), pool.PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+    err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
         fmt.Println("hello from pool")
         return nil, nil
-    }, nil)
+    })
     if err != nil {
         panic(err)
     }
 
     // 提交带返回值任务
-    resultCh, _ := p.SubmitWithResult(context.Background(), pool.PriorityHigh, 0, func(ctx context.Context) (interface{}, error) {
+    resultCh, _ := p.SubmitWithResult(context.Background(), func(ctx context.Context) (interface{}, error) {
         return "result from pool", nil
-    }, nil)
+    }, worker_pool.WithPriority(worker_pool.PriorityHigh))
     res := <-resultCh
     fmt.Println("result:", res.Result, "err:", res.Err)
 
@@ -95,11 +95,11 @@ type Pool struct {
     // ...
 }
 ```
-- `NewPool(minWorkers, maxWorkers int) *Pool`  
+- `NewPool(minWorkers int, opts ...PoolOption) *Pool`  
   创建协程池，指定最小和最大 worker 数。
-- `Submit(ctx, priority, timeout, taskFunc, recovery) error`  
+- `Submit(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) error`  
   提交任务，支持优先级、超时、recovery。
-- `SubmitWithResult(ctx, priority, timeout, taskFunc, recovery) (<-chan taskResult, error)`  
+- `SubmitWithResult(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) (<-chan TaskResult, error)`  
   提交带返回值任务。
 - `Stats() PoolStats`  
   获取池的统计信息。
@@ -110,13 +110,17 @@ type Pool struct {
 
 ```
 type Task struct {
-    ctx        context.Context
-    priority   int
-    timeout    time.Duration
-    taskFunc   func(ctx context.Context) (interface{}, error)
-    recovery   func(interface{})
-    resultChan chan taskResult
-    index      int
+    Ctx        context.Context
+    Priority   int
+    Timeout    time.Duration
+    TaskFunc   func(ctx context.Context) (interface{}, error)
+    Recovery   func(interface{})
+    ResultChan chan TaskResult
+    Index      int
+    LogFn      func(format string, args ...interface{})
+    Tag        string
+    Before     func()
+    After      func()
 }
 ```
 
@@ -139,21 +143,21 @@ type PoolStats struct {
 
 ### 1. 创建协程池
 ```go
-p := pool.NewPool(2, 10) // 最小2，最大10个worker
+p := worker_pool.NewPool(2, worker_pool.WithMaxWorkers(10)) // 最小2，最大10个worker
 ```
 
 ### 2. 提交普通任务
 ```go
-err := p.Submit(context.Background(), pool.PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
     // 你的任务逻辑
     fmt.Println("hello pool")
     return nil, nil
-}, nil)
+})
 ```
 
 ### 3. 提交带超时的任务
 ```go
-err := p.Submit(context.Background(), pool.PriorityNormal, 2*time.Second, func(ctx context.Context) (interface{}, error) {
+err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
     select {
     case <-time.After(3 * time.Second):
         fmt.Println("done")
@@ -161,33 +165,33 @@ err := p.Submit(context.Background(), pool.PriorityNormal, 2*time.Second, func(c
         fmt.Println("timeout or cancelled")
     }
     return nil, nil
-}, nil)
+}, worker_pool.WithTimeout(2*time.Second))
 ```
 
 ### 4. 提交高优先级任务
 ```go
-_ = p.Submit(context.Background(), pool.PriorityHigh, 0, func(ctx context.Context) (interface{}, error) {
+_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
     fmt.Println("high priority task")
     return nil, nil
-}, nil)
+}, worker_pool.WithPriority(worker_pool.PriorityHigh))
 ```
 
 ### 5. 提交带返回值的任务
 ```go
-resultCh, _ := p.SubmitWithResult(context.Background(), pool.PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+resultCh, _ := p.SubmitWithResult(context.Background(), func(ctx context.Context) (interface{}, error) {
     return 42, nil
-}, nil)
+})
 res := <-resultCh
-fmt.Println(res.result, res.err)
+fmt.Println(res.Result, res.Err)
 ```
 
 ### 6. 提交带 recovery 的任务
 ```go
-_ = p.Submit(context.Background(), pool.PriorityNormal, 0, func(ctx context.Context) (interface{}, error) {
+_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
     panic("something wrong")
-}, func(r interface{}) {
+}, worker_pool.WithRecovery(func(r interface{}) {
     fmt.Println("recovered from:", r)
-})
+}))
 ```
 
 ### 7. 获取统计信息

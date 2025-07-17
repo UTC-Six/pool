@@ -15,6 +15,7 @@ import (
 // - 其余字段见主流程注释
 // ctx: 推荐作为所有并发/超时/取消相关函数的第一个参数，便于统一管理生命周期
 type Task struct {
+	Ctx        context.Context // 新增：保存业务层传入的 ctx
 	Priority   int
 	Timeout    time.Duration
 	TaskFunc   func(ctx context.Context) (interface{}, error)
