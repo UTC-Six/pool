@@ -6,12 +6,6 @@ import (
 )
 
 // TaskPriority 定义任务优先级，数值越大优先级越高
-const (
-	PriorityLow    = 1
-	PriorityNormal = 5
-	PriorityHigh   = 10
-)
-
 // Task 表示一个池中要执行的任务，支持优先级、超时、recovery、日志、标签、钩子等扩展
 // 字段说明：
 // - Index: 用于优先队列（heap）定位任务位置，支持高效的优先级调度

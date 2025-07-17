@@ -265,3 +265,51 @@ func TestPool_DynamicResize(t *testing.T) {
 		t.Errorf("expected maxWorkers=5, got %d", p.maxWorkers)
 	}
 }
+
+// 边界条件测试：池关闭后提交任务
+func TestPool_SubmitAfterShutdown(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(2))
+	p.Shutdown()
+	err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+		return nil, nil
+	})
+	if err != ErrPoolClosed {
+		t.Errorf("expected ErrPoolClosed, got %v", err)
+	}
+}
+
+// Table-driven 测试：不同优先级任务执行顺序
+func TestPool_PriorityOrder(t *testing.T) {
+	p := NewPool(1, WithMaxWorkers(1))
+	defer p.Shutdown()
+
+	tasks := []struct {
+		priority int
+		msg      string
+	}{
+		{PriorityLow, "low"},
+		{PriorityHigh, "high"},
+		{PriorityNormal, "normal"},
+	}
+
+	results := make(chan string, len(tasks))
+	for _, tc := range tasks {
+		tc := tc
+		_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+			results <- tc.msg
+			return nil, nil
+		}, WithPriority(tc.priority))
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(results)
+	var got []string
+	for r := range results {
+		got = append(got, r)
+	}
+	// 由于优先级，high 应先于 normal，再于 low
+	// 这里只能保证 high 在最前，low 在最后
+	if got[0] != "high" || got[len(got)-1] != "low" {
+		t.Errorf("priority order not as expected: %v", got)
+	}
+}
