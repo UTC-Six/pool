@@ -441,6 +441,3 @@ func (p *Pool) Restart() {
 	}
 	p.mu.Unlock()
 }
-
-// 默认任务超时时间（可被 WithTimeout 覆盖）
-const DefaultTaskTimeout = 3 * time.Second // 默认3秒，业务可覆盖

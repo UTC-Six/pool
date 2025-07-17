@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	maxGoroutines = 100 // 默认最大并发数
+	maxGoroutines = DefaultMaxGoroutines // 默认最大并发数
 	semMu         sync.Mutex
 	sem           = make(chan struct{}, maxGoroutines)
 )
