@@ -15,7 +15,7 @@ func main() {
 
 	// 提交普通任务
 	err := p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-		fmt.Println("[worker_pool] hello from pool")
+		fmt.Println("[worker_pool.Submit] hello from pool")
 		return nil, nil
 	})
 	if err != nil {
@@ -27,15 +27,17 @@ func main() {
 		return "result from pool", nil
 	}, worker_pool.WithPriority(worker_pool.PriorityHigh))
 	res := <-resultCh
-	fmt.Println("[worker_pool] result:", res.Result, "err:", res.Err)
+	fmt.Println("[worker_pool.SubmitWithResult] result:", res.Result, "err:", res.Err)
 
 	// 提交带超时的任务
-	err = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = p.Submit(ctx, func(ctx context.Context) (interface{}, error) {
 		select {
 		case <-time.After(2 * time.Second):
 			fmt.Println("[worker_pool] done")
 		case <-ctx.Done():
-			fmt.Println("[worker_pool] timeout or cancelled")
+			fmt.Println("[worker_pool] ctx cancelled 场景")
 		}
 		return nil, nil
 	}, worker_pool.WithTimeout(1*time.Second))
@@ -69,19 +71,18 @@ func main() {
 	}
 
 	// 任务前后钩子
-	// WithBefore/WithAfter 可在任务执行前后自动执行自定义逻辑，常用于埋点、监控等场景。
 	_ = p.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
 		fmt.Println("[worker_pool] task with hooks running")
 		return nil, nil
 	}, worker_pool.WithBefore(func() { fmt.Println("[worker_pool] before hook") }), worker_pool.WithAfter(func() { fmt.Println("[worker_pool] after hook") }))
 
 	// 动态调整
-	// 运行时动态调整池的 min/max worker，适合弹性伸缩场景。
 	p.SetMinWorkers(3)
 	p.SetMaxWorkers(6)
-	fmt.Printf("[worker_pool] 动态调整后: min=%d, max=%d\n", p.Stats().ActiveWorkers, p.Stats().QueuedTasks)
+	stats := p.Stats()
+	fmt.Printf("[worker_pool] 动态调整后: min=%d, max=%d, active=%d, queued=%d\n", stats.MinWorkers, stats.MaxWorkers, stats.ActiveWorkers, stats.QueuedTasks)
 
 	// 获取统计信息
-	stats := p.Stats()
+	stats = p.Stats()
 	fmt.Printf("[worker_pool] 活跃worker: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
 }

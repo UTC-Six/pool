@@ -72,6 +72,12 @@ func main() {
     // 获取统计信息
     stats := p.Stats()
     fmt.Printf("活跃worker: %d, 排队: %d, 完成: %d\n", stats.ActiveWorkers, stats.QueuedTasks, stats.Completed)
+
+    // 动态调整
+    p.SetMinWorkers(3)
+    p.SetMaxWorkers(6)
+    stats = p.Stats()
+    fmt.Printf("[worker_pool] 动态调整后: min=%d, max=%d, active=%d, queued=%d\n", stats.MinWorkers, stats.MaxWorkers, stats.ActiveWorkers, stats.QueuedTasks)
 }
 ```
 
