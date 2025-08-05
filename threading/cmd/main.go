@@ -42,4 +42,15 @@ func main() {
 	}
 
 	// 其它 Option 用法同理
+
+	// GoSafe 使用 WithRecovery，自动捕获 panic 并自定义处理
+	err = threading.GoSafe(func() error {
+		fmt.Println("[threading] GoSafe panic 任务开始")
+		panic("something went wrong!")
+	}, threading.WithRecovery(func(r interface{}) {
+		fmt.Printf("[threading] panic recovered: %v\n", r)
+	}))
+	if err != nil {
+		fmt.Println("[threading] GoSafe panic error:", err)
+	}
 }
