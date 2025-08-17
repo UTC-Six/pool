@@ -1,5 +1,7 @@
 package main
 
+// 所有导入已注释，如需运行请取消注释main函数和相关导入
+/*
 import (
 	"context"
 	"fmt"
@@ -11,7 +13,10 @@ import (
 
 	"github.com/UTC-Six/pool/worker_pool"
 )
+*/
 
+// 如需运行压力测试，请取消注释下面的main函数
+/*
 func main() {
 	fmt.Println("🚀 Worker Pool 生产环境压力测试")
 	fmt.Printf("系统信息: CPU核心数=%d, GOMAXPROCS=%d\n", runtime.NumCPU(), runtime.GOMAXPROCS(0))
@@ -509,3 +514,4 @@ func runContextCancellationTest() {
 		fmt.Printf("⚠️  没有任务被取消，可能context取消机制有问题\n")
 	}
 }
+*/

@@ -9,38 +9,50 @@ import (
 	"time"
 )
 
-// Pool 表示协程池，支持自动扩容、优先级、超时、recovery、统计信息、动态核心worker调整
+// Pool 表示协程池，这是整个worker_pool的核心结构体
+// 🎯 核心设计理念：
+// 1. 预分配worker goroutine，避免频繁创建销毁的开销
+// 2. 使用优先级队列，支持任务优先级调度
+// 3. 动态扩缩容，根据负载自动调整worker数量
+// 4. 智能资源管理，支持CoreWorkers动态调整节省资源
 type Pool struct {
-	minWorkers  int
-	maxWorkers  int
-	coreWorkers int // 核心worker数量，可动态调整
-	mu          sync.Mutex
-	workers     int
-	taskQueue   taskPriorityQueue
-	taskCond    *sync.Cond
-	shutdown    bool
-	stats       PoolStats
-	wg          sync.WaitGroup
-	name        string
-	logger      func(format string, args ...interface{})
+	// === 基础配置 ===
+	minWorkers  int // 最小worker数量，池启动时创建的基础worker数
+	maxWorkers  int // 最大worker数量，高负载时的扩容上限
+	coreWorkers int // 🔥 核心worker数量，可动态调整的常驻worker数（业界创新特性）
 
-	// 动态调整相关字段
-	allowCoreTimeout  bool          // 是否允许核心worker超时
-	keepAliveTime     time.Duration // worker空闲超时时间
-	lastActivityTime  int64         // 最后活动时间（纳秒时间戳）
-	adjustCheckTicker *time.Ticker  // 调整检查定时器
-	stopAdjustCheck   chan struct{} // 停止调整检查信号
+	// === 并发控制 ===
+	mu       sync.Mutex     // 主锁，保护池的核心状态
+	workers  int            // 当前实际worker数量
+	taskCond *sync.Cond     // 条件变量，用于worker等待任务和唤醒
+	shutdown bool           // 关闭标志，标记池是否正在关闭
+	wg       sync.WaitGroup // 等待组，确保所有worker优雅退出
 
-	// 负载统计
-	taskSubmitCount     int64         // 任务提交计数
-	loadHistory         []LoadSample  // 负载历史记录
-	loadHistoryMu       sync.RWMutex  // 负载历史锁
-	adjustCheckInterval time.Duration // 调整检查间隔
+	// === 任务队列 ===
+	taskQueue taskPriorityQueue // 🎯 优先级任务队列，基于heap实现，支持高优先级任务优先执行
 
-	// 调整策略配置
-	coreAdjustStrategy CoreAdjustStrategy // 核心worker调整策略
-	lowLoadThreshold   float64            // 低负载百分比阈值 (0.0-1.0)
-	fixedCoreWorkers   int                // 用户固定设置的核心worker数，0表示使用动态调整
+	// === 监控统计 ===
+	stats  PoolStats                                // 基础统计信息（活跃worker、完成任务数等）
+	name   string                                   // 池名称，便于日志识别和监控
+	logger func(format string, args ...interface{}) // 日志函数，支持自定义日志输出
+
+	// === 🚀 动态调整核心特性（业界领先） ===
+	allowCoreTimeout  bool          // 是否允许核心worker超时退出
+	keepAliveTime     time.Duration // worker空闲多久后可以退出（仅在allowCoreTimeout=true时生效）
+	lastActivityTime  int64         // 最后活动时间（纳秒时间戳），用于空闲检测
+	adjustCheckTicker *time.Ticker  // 定时器，定期检查负载并调整CoreWorkers
+	stopAdjustCheck   chan struct{} // 停止调整检查的信号通道
+
+	// === 📊 负载监控系统 ===
+	taskSubmitCount     int64         // 原子计数器，记录总提交任务数
+	loadHistory         []LoadSample  // 负载历史记录，滑动窗口保存最近3小时数据
+	loadHistoryMu       sync.RWMutex  // 读写锁，保护负载历史的并发访问
+	adjustCheckInterval time.Duration // 负载检查间隔，默认10分钟
+
+	// === 🧠 智能调整策略 ===
+	coreAdjustStrategy CoreAdjustStrategy // 调整策略：固定/百分比/混合
+	lowLoadThreshold   float64            // 低负载阈值(0.0-1.0)，低于此值时考虑缩容
+	fixedCoreWorkers   int                // 用户手动设置的固定核心数，0表示使用动态调整
 }
 
 // LoadSample 负载采样数据
@@ -63,42 +75,64 @@ const (
 	StrategyHybrid
 )
 
-// NewPool 创建一个协程池，minWorkers 必须，其他参数可选
+// NewPool 创建一个协程池 - 工厂函数
+// 📝 参数说明：
+//
+//	minWorkers: 最小worker数量，必须>=1，这些worker会立即启动并常驻
+//	opts: 可选配置项，支持链式配置（WithMaxWorkers、WithLogger等）
+//
+// 🎯 设计亮点：
+// 1. 采用Options模式，配置灵活且向后兼容
+// 2. 合理的默认值，开箱即用
+// 3. 立即启动minWorkers个goroutine，确保响应速度
+// 4. 自动启动负载监控，支持智能资源管理
 func NewPool(minWorkers int, opts ...PoolOption) *Pool {
+	// 参数校验：确保至少有1个worker
 	if minWorkers < 1 {
 		minWorkers = 1
 	}
+
+	// 创建Pool实例，设置合理的默认值
 	p := &Pool{
+		// === 基础配置 ===
 		minWorkers:  minWorkers,
-		maxWorkers:  minWorkers, // 默认最大等于最小
-		coreWorkers: minWorkers, // 默认核心worker等于最小值
-		workers:     minWorkers,
-		logger:      func(format string, args ...interface{}) {}, // 默认空实现
+		maxWorkers:  minWorkers,                                  // 默认最大等于最小，即不自动扩容
+		coreWorkers: minWorkers,                                  // 默认核心worker等于最小值
+		workers:     minWorkers,                                  // 当前worker数量
+		logger:      func(format string, args ...interface{}) {}, // 默认空日志实现
 
-		// 动态调整默认配置
-		allowCoreTimeout:    false,
-		keepAliveTime:       60 * time.Second,
-		adjustCheckInterval: 10 * time.Minute, // 默认10分钟检查一次
-		stopAdjustCheck:     make(chan struct{}),
-		loadHistory:         make([]LoadSample, 0, 180), // 3小时，每分钟一个样本
+		// === 🚀 动态调整默认配置 ===
+		allowCoreTimeout:    false,                      // 默认不允许核心worker超时
+		keepAliveTime:       60 * time.Second,           // 默认60秒空闲超时
+		adjustCheckInterval: 10 * time.Minute,           // 默认10分钟检查一次负载
+		stopAdjustCheck:     make(chan struct{}),        // 创建停止信号通道
+		loadHistory:         make([]LoadSample, 0, 180), // 预分配容量：3小时*每分钟1个样本=180
 
-		// 调整策略默认配置
-		coreAdjustStrategy: StrategyPercentage, // 默认使用百分比策略
-		lowLoadThreshold:   0.3,                // 默认30%阈值
-		fixedCoreWorkers:   0,                  // 默认使用动态调整
+		// === 🧠 智能调整策略默认配置 ===
+		coreAdjustStrategy: StrategyPercentage, // 默认使用百分比策略（推荐）
+		lowLoadThreshold:   0.3,                // 默认30%阈值（保守设置）
+		fixedCoreWorkers:   0,                  // 0表示使用动态调整，非0表示固定值
 	}
+	// 应用用户配置：Options模式的核心，允许用户覆盖默认配置
 	for _, opt := range opts {
-		opt(p)
-	}
-	p.taskCond = sync.NewCond(&p.mu)
-	heap.Init(&p.taskQueue)
-	for i := 0; i < minWorkers; i++ {
-		p.startWorker()
+		opt(p) // 每个option都是一个函数，修改Pool的相应字段
 	}
 
-	// 启动动态调整监控
+	// === 初始化核心组件 ===
+	p.taskCond = sync.NewCond(&p.mu) // 创建条件变量，用于worker间的协调
+	heap.Init(&p.taskQueue)          // 初始化优先级队列，确保heap性质
+
+	// 🚀 立即启动worker goroutines - 这是性能的关键！
+	// 预分配worker避免了任务到来时的创建开销，确保低延迟响应
+	for i := 0; i < minWorkers; i++ {
+		p.startWorker() // 每个worker都是独立的goroutine，等待任务
+	}
+
+	// 🔥 启动智能监控系统 - 业界领先特性
+	// 这个goroutine会定期收集负载数据，并根据策略调整CoreWorkers
 	p.startLoadMonitoring()
 
+	// 记录池创建日志，便于运维监控
 	if p.logger != nil && p.name != "" {
 		p.logger("Pool %s created with min=%d, max=%d, core=%d", p.name, p.minWorkers, p.maxWorkers, p.coreWorkers)
 	}
@@ -186,37 +220,63 @@ func WithFixedCoreWorkers(core int) PoolOption {
 	}
 }
 
-// Submit 提交一个任务到池中，支持可选参数
-// - 并发安全：全程持有锁，保证任务队列和池状态一致性
-// - ctx: 推荐作为第一个参数，便于任务取消/超时/统一管理
-// - Option: 推荐用 Option 传递可选参数，灵活扩展
-// - 默认超时时间：3秒，业务可用 WithTimeout 覆盖
+// Submit 提交任务到池中 - 这是最核心的API
+// 🎯 核心特性：
+// 1. 异步执行：任务立即入队，不阻塞调用方
+// 2. 优先级支持：支持高/中/低优先级任务调度
+// 3. 超时控制：支持Context和WithTimeout双重超时机制
+// 4. 错误恢复：支持panic恢复，不影响其他任务
+// 5. 丰富选项：支持标签、钩子、日志等扩展功能
+//
+// 📝 参数说明：
+//
+//	ctx: 上下文，用于任务取消和超时控制
+//	taskFunc: 任务函数，接收context并返回结果和错误
+//	opts: 可选配置（优先级、超时、恢复等）
+//
+// 🚀 性能优化：
+// - 使用原子操作记录统计信息，避免锁竞争
+// - 优先级队列确保重要任务优先执行
+// - 自动扩容机制应对突发流量
 func (p *Pool) Submit(ctx context.Context, taskFunc func(ctx context.Context) (interface{}, error), opts ...TaskOption) error {
+	// === 参数校验 ===
 	if taskFunc == nil {
 		return fmt.Errorf("taskFunc cannot be nil")
 	}
 
-	// 记录活动时间和任务计数
-	atomic.StoreInt64(&p.lastActivityTime, time.Now().UnixNano())
-	atomic.AddInt64(&p.taskSubmitCount, 1)
+	// === 📊 统计信息更新（原子操作，高性能） ===
+	atomic.StoreInt64(&p.lastActivityTime, time.Now().UnixNano()) // 记录最后活动时间，用于空闲检测
+	atomic.AddInt64(&p.taskSubmitCount, 1)                        // 增加任务计数，用于监控
 
+	// === 🔒 临界区：任务入队操作 ===
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// 检查池状态：如果正在关闭，拒绝新任务
 	if p.shutdown {
 		return ErrPoolClosed
 	}
+
+	// === 📦 构造任务对象 ===
 	task := &Task{
-		Priority: PriorityNormal,     // 默认
-		Timeout:  DefaultTaskTimeout, // 默认超时3秒，业务可覆盖
-		TaskFunc: taskFunc,
-		Ctx:      ctx, // 新增
+		Priority: PriorityNormal,     // 默认普通优先级
+		Timeout:  DefaultTaskTimeout, // 默认3秒超时
+		TaskFunc: taskFunc,           // 用户任务函数
+		Ctx:      ctx,                // 保存用户context
 	}
+
+	// 应用用户配置选项（优先级、超时、钩子等）
 	for _, opt := range opts {
 		opt(task)
 	}
-	heap.Push(&p.taskQueue, task)
-	p.taskCond.Signal()
-	p.autoScale()
+
+	// === 🎯 任务入队（优先级队列） ===
+	heap.Push(&p.taskQueue, task) // 根据优先级插入队列
+	p.taskCond.Signal()           // 唤醒一个等待的worker
+
+	// === 🚀 自动扩容检查 ===
+	p.autoScale() // 根据队列长度决定是否需要创建新worker
+
 	return nil
 }
 

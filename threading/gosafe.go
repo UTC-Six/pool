@@ -1,3 +1,13 @@
+// Package threading 提供受控的goroutine启动工具
+// 🎯 核心设计理念：
+// 1. 轻量级：按需创建goroutine，无预分配开销
+// 2. 受控制：通过信号量限制并发数，避免goroutine爆炸
+// 3. 安全性：内置panic恢复，单个任务失败不影响全局
+// 4. 灵活性：丰富的配置选项，支持超时、钩子、日志等
+//
+// 🔄 与worker_pool的区别：
+// - worker_pool: 预分配worker池，适合持续高频任务
+// - threading: 按需创建，适合偶发性或一次性任务
 package threading
 
 import (
@@ -7,28 +17,49 @@ import (
 	"time"
 )
 
+// === 全局并发控制 ===
+// 使用信号量模式控制全局goroutine数量，这是Go中控制并发的经典模式
 var (
-	maxGoroutines = DefaultMaxGoroutines // 默认最大并发数
-	semMu         sync.Mutex
-	sem           = make(chan struct{}, maxGoroutines)
+	maxGoroutines = DefaultMaxGoroutines               // 默认最大并发数
+	semMu         sync.Mutex                           // 保护信号量重建的互斥锁
+	sem           = make(chan struct{}, maxGoroutines) // 信号量：channel容量=最大并发数
 )
 
-// SetMaxGoroutines 动态设置最大并发 goroutine 数
+// SetMaxGoroutines 动态设置全局最大并发goroutine数
+// 🔧 使用场景：
+// - 系统启动时根据CPU核心数设置合理并发数
+// - 运行时根据系统负载动态调整并发限制
+// - 不同环境（开发/测试/生产）使用不同并发配置
+//
+// 💡 设计亮点：
+// - 线程安全的动态调整，运行时无需重启
+// - 智能保留现有goroutine占用，避免突然中断
+// - 无效参数直接忽略，不会破坏现有状态
 func SetMaxGoroutines(n int) {
+	// 参数校验：负数和零值无意义
 	if n <= 0 {
 		return
 	}
+
+	// === 🔒 临界区：重建信号量 ===
 	semMu.Lock()
 	defer semMu.Unlock()
+
+	// 如果新值与当前容量相同，无需操作
 	if n == cap(sem) {
 		return
 	}
+
+	// 保存旧信号量，创建新信号量
 	oldSem := sem
 	sem = make(chan struct{}, n)
-	// 尽量保留原有已占用的 goroutine 数
+
+	// 🧠 智能迁移：尽量保留原有的goroutine占用
+	// 这样可以避免正在运行的goroutine被突然中断
 	for i := 0; i < len(oldSem) && i < n; i++ {
-		sem <- struct{}{}
+		sem <- struct{}{} // 将占用状态迁移到新信号量
 	}
+
 	maxGoroutines = n
 }
 

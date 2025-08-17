@@ -1,5 +1,7 @@
 package main
 
+// 所有导入已注释，如需运行请取消注释main函数和相关导入
+/*
 import (
 	"context"
 	"fmt"
@@ -8,7 +10,9 @@ import (
 
 	"github.com/UTC-Six/pool/worker_pool"
 )
+*/
 
+/*
 func simpleTest() {
 	fmt.Println("=== 简单功能测试 ===")
 
@@ -78,6 +82,9 @@ func simpleTest() {
 	fmt.Println("\n=== 测试完成 ===")
 }
 
+// 如需运行简单测试，请取消注释下面的main函数
+/*
 func main() {
 	simpleTest()
 }
+*/
