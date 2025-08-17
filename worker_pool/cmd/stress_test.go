@@ -85,7 +85,7 @@ func runBasicStressTest() {
 	wg.Wait()
 	duration := time.Since(start)
 
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	tps := float64(numTasks) / duration.Seconds()
 
 	fmt.Printf("✅ 基础压力测试完成:\n")
@@ -154,7 +154,7 @@ func runHighConcurrencyTest() {
 	duration := time.Since(start)
 
 	expectedTasks := int64(numGoroutines * tasksPerGoroutine)
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 
 	fmt.Printf("✅ 高并发测试完成:\n")
 	fmt.Printf("   - 并发数: %d goroutines\n", numGoroutines)
@@ -214,7 +214,7 @@ func runLongRunningTest() {
 		for {
 			select {
 			case <-ticker.C:
-				stats := pool.EnhancedStats()
+				stats := pool.DetailedStats()
 				fmt.Printf("   [监控] Tasks=%d, Active=%d, Core=%d, Queue=%d, History=%d\n",
 					atomic.LoadInt64(&taskCounter), stats.ActiveWorkers, stats.CoreWorkers,
 					stats.QueuedTasks, stats.LoadHistoryLength)
@@ -232,7 +232,7 @@ func runLongRunningTest() {
 	// 等待剩余任务完成
 	time.Sleep(1 * time.Second)
 
-	finalStats := pool.EnhancedStats()
+	finalStats := pool.DetailedStats()
 	fmt.Printf("✅ 长时间运行测试完成:\n")
 	fmt.Printf("   - 总任务数: %d\n", atomic.LoadInt64(&taskCounter))
 	fmt.Printf("   - 最终统计: Active=%d, Core=%d, Completed=%d\n",
@@ -343,13 +343,13 @@ func runCoreWorkersAdjustmentTest() {
 
 		s.setup(pool)
 
-		initialStats := pool.EnhancedStats()
+		initialStats := pool.DetailedStats()
 		fmt.Printf("     初始状态: Core=%d, Strategy=%s\n",
 			initialStats.CoreWorkers, initialStats.CoreAdjustStrategy)
 
 		// 手动调整测试
 		pool.SetCoreWorkers(8)
-		afterManualStats := pool.EnhancedStats()
+		afterManualStats := pool.DetailedStats()
 		fmt.Printf("     手动调整后: Core=%d\n", afterManualStats.CoreWorkers)
 
 		// 提交一些任务测试自动调整
@@ -363,7 +363,7 @@ func runCoreWorkersAdjustmentTest() {
 		// 等待任务完成和可能的自动调整
 		time.Sleep(2 * time.Second)
 
-		finalStats := pool.EnhancedStats()
+		finalStats := pool.DetailedStats()
 		fmt.Printf("     最终状态: Core=%d, Active=%d, Completed=%d, History=%d\n",
 			finalStats.CoreWorkers, finalStats.ActiveWorkers,
 			finalStats.Completed, finalStats.LoadHistoryLength)

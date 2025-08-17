@@ -18,7 +18,7 @@ func TestBasicFunctionality(t *testing.T) {
 			t.Fatal("Failed to create pool")
 		}
 
-		stats := pool.EnhancedStats()
+		stats := pool.DetailedStats()
 		if stats.MinWorkers != 5 {
 			t.Errorf("Expected MinWorkers=5, got %d", stats.MinWorkers)
 		}
@@ -58,7 +58,7 @@ func TestBasicFunctionality(t *testing.T) {
 			t.Errorf("Expected 10 tasks executed, got %d", counter)
 		}
 
-		stats := pool.EnhancedStats()
+		stats := pool.DetailedStats()
 		if stats.TaskSubmitCount != 10 {
 			t.Errorf("Expected TaskSubmitCount=10, got %d", stats.TaskSubmitCount)
 		}
@@ -150,7 +150,7 @@ func TestConcurrentSubmission(t *testing.T) {
 		t.Errorf("Expected %d tasks executed, got %d", expectedTasks, counter)
 	}
 
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	if stats.TaskSubmitCount != expectedTasks {
 		t.Errorf("Expected TaskSubmitCount=%d, got %d", expectedTasks, stats.TaskSubmitCount)
 	}
@@ -232,7 +232,7 @@ func TestCoreWorkersAdjustment(t *testing.T) {
 	defer pool.Shutdown()
 
 	// 测试固定策略
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	if stats.CoreWorkers != 5 {
 		t.Errorf("Expected CoreWorkers=5, got %d", stats.CoreWorkers)
 	}
@@ -270,7 +270,7 @@ func TestLoadMonitoring(t *testing.T) {
 	// 等待几个监控周期
 	time.Sleep(500 * time.Millisecond)
 
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	if stats.LoadHistoryLength == 0 {
 		t.Error("Expected load history to be collected")
 	}
@@ -360,7 +360,7 @@ func TestHighLoad(t *testing.T) {
 		t.Errorf("Expected %d tasks completed, got %d", numTasks, completed)
 	}
 
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	t.Logf("High load test completed: %d tasks in %v", numTasks, duration)
 	t.Logf("Final stats: Active=%d, Completed=%d, Total=%d",
 		stats.ActiveWorkers, stats.Completed, stats.TaskSubmitCount)
@@ -418,7 +418,7 @@ func TestEdgeCases(t *testing.T) {
 		pool := NewPool(0) // 应该被调整为1
 		defer pool.Shutdown()
 
-		stats := pool.EnhancedStats()
+		stats := pool.DetailedStats()
 		if stats.MinWorkers != 1 {
 			t.Errorf("Expected MinWorkers=1, got %d", stats.MinWorkers)
 		}
@@ -428,7 +428,7 @@ func TestEdgeCases(t *testing.T) {
 		pool := NewPool(-5) // 应该被调整为1
 		defer pool.Shutdown()
 
-		stats := pool.EnhancedStats()
+		stats := pool.DetailedStats()
 		if stats.MinWorkers != 1 {
 			t.Errorf("Expected MinWorkers=1, got %d", stats.MinWorkers)
 		}
@@ -438,7 +438,7 @@ func TestEdgeCases(t *testing.T) {
 		pool := NewPool(10, WithMaxWorkers(5)) // MaxWorkers应该被调整为10
 		defer pool.Shutdown()
 
-		stats := pool.EnhancedStats()
+		stats := pool.DetailedStats()
 		if stats.MaxWorkers != 10 {
 			t.Errorf("Expected MaxWorkers=10, got %d", stats.MaxWorkers)
 		}
@@ -488,7 +488,7 @@ func TestRaceConditions(t *testing.T) {
 				})
 			case 1:
 				// 获取统计信息
-				pool.EnhancedStats()
+				pool.DetailedStats()
 			case 2:
 				// 调整CoreWorkers
 				pool.SetCoreWorkers(5 + (id % 10))

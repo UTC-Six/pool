@@ -22,7 +22,7 @@ func simpleTest() {
 	)
 	defer pool.Shutdown()
 
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	fmt.Printf("初始状态 - Min: %d, Max: %d, Core: %d, Strategy: %s\n",
 		stats.MinWorkers, stats.MaxWorkers, stats.CoreWorkers, stats.CoreAdjustStrategy)
 
@@ -37,7 +37,7 @@ func simpleTest() {
 	}
 
 	time.Sleep(500 * time.Millisecond)
-	stats = pool.EnhancedStats()
+	stats = pool.DetailedStats()
 	fmt.Printf("任务提交后 - Active: %d, Completed: %d, Total: %d\n",
 		stats.ActiveWorkers, stats.Completed, stats.TaskSubmitCount)
 
@@ -58,7 +58,7 @@ func simpleTest() {
 	)
 	defer fixedPool.Shutdown()
 
-	fixedStats := fixedPool.EnhancedStats()
+	fixedStats := fixedPool.DetailedStats()
 	fmt.Printf("固定策略 - Core: %d, Strategy: %s\n", fixedStats.CoreWorkers, fixedStats.CoreAdjustStrategy)
 
 	// 百分比策略
@@ -70,7 +70,7 @@ func simpleTest() {
 	)
 	defer percentPool.Shutdown()
 
-	percentStats := percentPool.EnhancedStats()
+	percentStats := percentPool.DetailedStats()
 	fmt.Printf("百分比策略 - Core: %d, Strategy: %s, Threshold: %.1f%%\n",
 		percentStats.CoreWorkers, percentStats.CoreAdjustStrategy, percentStats.LowLoadThreshold*100)
 
