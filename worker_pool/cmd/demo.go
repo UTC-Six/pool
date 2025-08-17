@@ -123,7 +123,7 @@ func runEnhancedExample() {
 
 	// 场景1: 初始状态展示
 	fmt.Println("\n=== 场景1: 初始状态 ===")
-	stats := pool.EnhancedStats()
+	stats := pool.DetailedStats()
 	fmt.Printf("初始状态 - Workers: %d, Core: %d, Strategy: %s, Threshold: %.1f%%\n",
 		stats.ActiveWorkers, stats.CoreWorkers, stats.CoreAdjustStrategy, stats.LowLoadThreshold*100)
 
@@ -132,7 +132,7 @@ func runEnhancedExample() {
 	fmt.Println("手动设置核心worker为5...")
 	pool.SetCoreWorkers(5)
 
-	stats = pool.EnhancedStats()
+	stats = pool.DetailedStats()
 	fmt.Printf("手动调整后 - Core: %d\n", stats.CoreWorkers)
 
 	// 场景3: 测试不同策略
@@ -148,7 +148,7 @@ func runEnhancedExample() {
 	)
 	defer fixedPool.Shutdown()
 
-	stats = fixedPool.EnhancedStats()
+	stats = fixedPool.DetailedStats()
 	fmt.Printf("固定策略 - Core: %d, Strategy: %s\n", stats.CoreWorkers, stats.CoreAdjustStrategy)
 
 	// 场景4: 提交一些任务测试
@@ -162,19 +162,19 @@ func runEnhancedExample() {
 	}
 
 	time.Sleep(1 * time.Second) // 等待任务处理
-	stats = pool.EnhancedStats()
+	stats = pool.DetailedStats()
 	fmt.Printf("任务提交后 - Workers: %d, Core: %d, Queue: %d, Completed: %d\n",
 		stats.ActiveWorkers, stats.CoreWorkers, stats.QueuedTasks, stats.Completed)
 
 	// 等待一个监控周期看看是否有调整
 	fmt.Println("等待2秒观察监控...")
 	time.Sleep(2 * time.Second)
-	stats = pool.EnhancedStats()
+	stats = pool.DetailedStats()
 	fmt.Printf("监控后 - Core: %d, HistoryLength: %d\n", stats.CoreWorkers, stats.LoadHistoryLength)
 
 	// 最终统计
 	fmt.Println("\n=== 最终统计 ===")
-	finalStats := pool.EnhancedStats()
+	finalStats := pool.DetailedStats()
 	fmt.Printf("增强Pool最终状态:\n")
 	fmt.Printf("  - 核心Worker: %d\n", finalStats.CoreWorkers)
 	fmt.Printf("  - 最小Worker: %d\n", finalStats.MinWorkers)

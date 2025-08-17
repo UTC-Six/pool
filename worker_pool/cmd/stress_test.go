@@ -1,7 +1,5 @@
 package main
 
-// 如需运行压力测试，请取消注释下面的导入和main函数
-/*
 import (
 	"context"
 	"fmt"
@@ -130,11 +128,8 @@ func runHighConcurrencyTest() {
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			var localWg sync.WaitGroup
 			for j := 0; j < tasksPerGoroutine; j++ {
-				localWg.Add(1)
 				err := pool.Submit(context.Background(), func(ctx context.Context) (interface{}, error) {
-					defer localWg.Done()
 					atomic.AddInt64(&totalCompleted, 1)
 					// 随机工作负载
 					if goroutineID%2 == 0 {
@@ -150,10 +145,8 @@ func runHighConcurrencyTest() {
 
 				if err != nil {
 					fmt.Printf("❌ Goroutine %d 提交任务失败: %v\n", goroutineID, err)
-					localWg.Done() // 如果提交失败，手动调用Done
 				}
 			}
-			localWg.Wait() // 等待该goroutine的所有任务完成
 		}(i)
 	}
 
@@ -282,19 +275,14 @@ func runResourceLeakTest() {
 	runtime.ReadMemStats(&m2)
 
 	finalGoroutines := runtime.NumGoroutine()
-	var memoryIncrease int64
-	if m2.Alloc >= m1.Alloc {
-		memoryIncrease = int64(m2.Alloc - m1.Alloc)
-	} else {
-		memoryIncrease = -int64(m1.Alloc - m2.Alloc) // 内存实际减少了
-	}
+	memoryIncrease := m2.Alloc - m1.Alloc
 	goroutineIncrease := finalGoroutines - initialGoroutines
 
 	fmt.Printf("✅ 资源泄露测试完成:\n")
 	fmt.Printf("   - 初始Goroutines: %d\n", initialGoroutines)
 	fmt.Printf("   - 最终Goroutines: %d\n", finalGoroutines)
 	fmt.Printf("   - Goroutine增长: %d\n", goroutineIncrease)
-	fmt.Printf("   - 内存变化: %d bytes (%.2f KB)\n", memoryIncrease, float64(memoryIncrease)/1024)
+	fmt.Printf("   - 内存增长: %d bytes (%.2f KB)\n", memoryIncrease, float64(memoryIncrease)/1024)
 
 	if goroutineIncrease > 10 {
 		fmt.Printf("⚠️  可能存在Goroutine泄露: 增长了 %d 个\n", goroutineIncrease)
@@ -511,4 +499,3 @@ func runContextCancellationTest() {
 		fmt.Printf("⚠️  没有任务被取消，可能context取消机制有问题\n")
 	}
 }
-*/

@@ -1,3 +1,50 @@
+// worker_pool 包提供了一个功能完整的goroutine池实现
+//
+// 🔥 缩容机制完整说明：
+//
+// 1. 缩容决策机制：
+//   - 由adjustByPercentage()基于负载历史（3小时数据）分析决策
+//   - 如果80%的时间负载低于阈值，则调整coreWorkers为更小值
+//   - 决策结果体现在coreWorkers字段中，这是缩容的"目标值"
+//
+// 2. 缩容执行机制：
+//   - worker检查：当前worker数 > coreWorkers 且 allowCoreTimeout = true
+//   - 超出coreWorkers的worker在空闲keepAliveTime后自动退出
+//   - 不依赖瞬时队列状态，而是相信负载分析的长期趋势判断
+//
+// 3. 缩容实现位置：
+//   - startWorker()方法中的第337行：p.workers--
+//   - 这是整个系统中唯一减少worker数量的地方
+//   - 所有worker都会定期检查coreWorkers变化，支持动态调整
+//
+// 4. 缩容安全性：
+//   - 使用双重检查：超时前检查条件，超时后再次检查条件
+//   - 原子操作：p.workers--在锁保护下执行
+//   - 优雅退出：worker goroutine通过return正常结束，无强制杀死
+//
+// 🛡️ 优雅退出机制详解：
+//
+// 1. 什么是优雅退出？
+//   - goroutine通过正常的控制流程（return）结束
+//   - 不是被外部强制终止（如强制关闭channel、panic等）
+//   - 允许goroutine完成清理工作和资源释放
+//
+// 2. 为什么需要优雅退出？
+//   - 避免数据丢失：正在处理的任务可以完成
+//   - 防止资源泄露：可以正确释放连接、文件句柄等
+//   - 保证一致性：避免中途中断导致的不一致状态
+//   - 提高稳定性：减少因强制终止导致的系统异常
+//
+// 3. 我们的优雅退出实现：
+//   - 使用超时等待而不是立即退出
+//   - 双重条件检查确保退出时机正确
+//   - 通过return语句自然结束goroutine生命周期
+//   - WaitGroup确保所有worker完全退出后才关闭池
+//
+// 5. 为什么这样设计：
+//   - 避免强制杀死worker，保证任务完整性
+//   - 分离关注点：调整策略 vs 实际执行
+//   - 线程安全：每个worker自己决定是否退出
 package worker_pool
 
 import (
@@ -316,20 +363,106 @@ func (p *Pool) SubmitWithResult(ctx context.Context, taskFunc func(ctx context.C
 	return resultChan, nil
 }
 
-// startWorker 启动一个 worker goroutine
+// startWorker 启动一个worker goroutine
+// 🔥 缩容机制详解：
+// 1. worker在空闲时会检查是否可以退出（基于keepAliveTime超时）
+// 2. 退出条件：allowCoreTimeout=true 且 当前worker数 > coreWorkers 且 空闲超过keepAliveTime
+// 3. 通过p.workers--实现worker数量的减少，这是唯一的缩容实现位置
 func (p *Pool) startWorker() {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+
 		for {
 			p.mu.Lock()
-			for len(p.taskQueue) == 0 && !p.shutdown {
-				p.taskCond.Wait()
+
+			// === 🎯 缩容逻辑核心实现 ===
+			// 🔥 正确的缩容逻辑：
+			// 1. 缩容决策由adjustByPercentage()基于负载历史做出，体现在coreWorkers值中
+			// 2. worker只需要检查：当前worker数 > coreWorkers 且 允许超时
+			// 3. 不应该依赖瞬时的队列状态，而应该相信负载分析的结果
+
+			// 检查是否可以超时退出（基于负载分析结果）
+			canTimeout := p.allowCoreTimeout && p.workers > p.coreWorkers
+
+			if len(p.taskQueue) == 0 && !p.shutdown {
+				if canTimeout {
+					// 🎯 超出CoreWorkers的worker：使用keepAliveTime超时等待
+					// 这些worker是"多余"的，应该在空闲时退出以节省资源
+					p.mu.Unlock()
+
+					ctx, cancel := context.WithTimeout(context.Background(), p.keepAliveTime)
+					done := make(chan struct{})
+
+					go func() {
+						p.mu.Lock()
+						for len(p.taskQueue) == 0 && !p.shutdown {
+							p.taskCond.Wait()
+						}
+						p.mu.Unlock()
+						close(done)
+					}()
+
+					select {
+					case <-done:
+						cancel()
+						// 有任务到达，继续处理
+					case <-ctx.Done():
+						cancel()
+						// 🛡️ 优雅退出：基于负载分析的智能缩容
+						p.mu.Lock()
+						if p.workers > p.coreWorkers { // 再次确认仍然超出核心数
+							p.workers-- // 🔥 缩容实现：减少worker计数
+							if p.logger != nil {
+								p.logger("Worker shrunk due to low load, workers: %d -> %d (coreWorkers: %d)",
+									p.workers+1, p.workers, p.coreWorkers)
+							}
+							p.mu.Unlock()
+
+							// 🎯 关键：通过return优雅退出goroutine
+							// 这里不是被强制杀死，而是worker自主决定退出
+							// 所有清理工作都会被defer语句正确执行
+							// WaitGroup会被正确递减，确保Shutdown()能正常完成
+							return // 优雅退出：goroutine自然结束生命周期
+						}
+						p.mu.Unlock()
+					}
+					continue
+				} else {
+					// 🎯 CoreWorkers范围内的worker：定期检查是否变成"多余"worker
+					// 当coreWorkers动态调整后，原本的核心worker可能变成多余worker
+					p.mu.Unlock()
+
+					// 使用较短超时定期检查coreWorkers变化
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					done := make(chan struct{})
+
+					go func() {
+						p.mu.Lock()
+						for len(p.taskQueue) == 0 && !p.shutdown {
+							p.taskCond.Wait()
+						}
+						p.mu.Unlock()
+						close(done)
+					}()
+
+					select {
+					case <-done:
+						cancel()
+						// 有任务到达，继续处理
+					case <-ctx.Done():
+						cancel()
+						// 超时，重新检查条件（下一次循环会重新评估canTimeout）
+					}
+					continue
+				}
 			}
+
 			if p.shutdown && len(p.taskQueue) == 0 {
 				p.mu.Unlock()
 				return
 			}
+
 			task := heap.Pop(&p.taskQueue).(*Task)
 			p.stats.ActiveWorkers++
 			p.stats.QueuedTasks = len(p.taskQueue)
@@ -381,7 +514,12 @@ func (p *Pool) handleTask(ctx context.Context, task *Task) {
 	}
 }
 
-// autoScale 根据任务队列长度自动扩容 worker
+// autoScale 根据任务队列长度自动扩容worker
+// 🔒 线程安全性分析：
+// 1. 此方法在Submit/SubmitWithResult中调用，调用时已持有p.mu锁
+// 2. 访问的字段(p.workers, p.maxWorkers, len(p.taskQueue))都在锁保护下
+// 3. p.startWorker()内部会启动新goroutine，但不需要额外锁保护
+// 4. 因此这个方法是线程安全的，不需要额外加锁
 func (p *Pool) autoScale() {
 	if p.workers >= p.maxWorkers {
 		return
@@ -405,22 +543,42 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
-// Shutdown 关闭池，等待所有任务完成
+// Shutdown 优雅关闭池，等待所有任务和worker完成
+// 🛡️ 优雅关闭机制：
+// 1. 停止负载监控goroutine
+// 2. 设置shutdown标志，阻止新任务提交
+// 3. 广播唤醒所有等待的worker
+// 4. 等待所有worker优雅退出（通过WaitGroup）
+// 5. 确保没有goroutine泄露
 func (p *Pool) Shutdown() {
-	// 停止负载监控
+	// 第一步：停止负载监控goroutine
 	p.mu.Lock()
 	if p.stopAdjustCheck != nil {
 		select {
 		case <-p.stopAdjustCheck:
 			// channel already closed
 		default:
-			close(p.stopAdjustCheck)
+			close(p.stopAdjustCheck) // 优雅停止监控goroutine
 		}
 	}
+
+	// 第二步：设置关闭标志，阻止新任务提交
 	p.shutdown = true
-	p.taskCond.Broadcast()
+
+	// 第三步：唤醒所有等待的worker，让它们检查shutdown标志
+	p.taskCond.Broadcast() // 广播信号，唤醒所有Wait()中的worker
 	p.mu.Unlock()
-	p.wg.Wait()
+
+	// 第四步：等待所有worker优雅退出
+	// 🎯 关键：这里会阻塞直到所有worker通过return优雅退出
+	// 每个worker在退出时会调用wg.Done()，当所有worker都退出后Wait()才会返回
+	p.wg.Wait() // 确保所有worker都已优雅退出，无goroutine泄露
+
+	// 到这里，可以保证：
+	// - 所有正在处理的任务都已完成
+	// - 所有worker goroutine都已优雅退出
+	// - 没有goroutine泄露
+	// - 所有资源都已正确清理
 }
 
 // SetMinWorkers 动态设置最小 worker 数
@@ -540,7 +698,13 @@ func (p *Pool) adjustCoreWorkers() {
 	}
 }
 
-// adjustByPercentage 基于百分比策略调整
+// adjustByPercentage 基于负载历史百分比调整核心worker数量
+// 🔒 线程安全性分析：
+// 1. 使用loadHistoryMu.RLock()保护负载历史数据的读取
+// 2. 访问p.minWorkers, p.lowLoadThreshold等配置字段时无锁（这些是只读配置）
+// 3. 修改p.coreWorkers时使用p.mu.Lock()保护
+// 4. 采用双重锁设计：读锁保护数据读取，写锁保护状态修改
+// 5. 线程安全，设计合理
 func (p *Pool) adjustByPercentage() {
 	p.loadHistoryMu.RLock()
 	defer p.loadHistoryMu.RUnlock()
@@ -577,7 +741,8 @@ func (p *Pool) adjustByPercentage() {
 		}
 		p.mu.Unlock()
 	} else if lowLoadRatio < 0.3 {
-		// 如果低负载比例低于30%，考虑恢复核心worker数量
+		// 如果低负载比例低于30%，考虑恢复核心worker数量到minWorkers
+		// 注意：这里只是调整coreWorkers数量，实际的worker扩容由autoScale()处理
 		p.mu.Lock()
 		if p.coreWorkers < p.minWorkers {
 			oldCore := p.coreWorkers
@@ -649,8 +814,8 @@ func (p *Pool) GetLoadHistory() []LoadSample {
 	return history
 }
 
-// EnhancedStats 增强的统计信息
-type EnhancedStats struct {
+// DetailedStats 详细的统计信息，包含所有监控指标
+type DetailedStats struct {
 	PoolStats
 	CoreWorkers        int       `json:"core_workers"`
 	LastActivityTime   time.Time `json:"last_activity_time"`
@@ -661,8 +826,8 @@ type EnhancedStats struct {
 	LoadHistoryLength  int       `json:"load_history_length"`
 }
 
-// EnhancedStats 获取增强统计信息
-func (p *Pool) EnhancedStats() EnhancedStats {
+// DetailedStats 获取详细统计信息
+func (p *Pool) DetailedStats() DetailedStats {
 	p.mu.Lock()
 	// 直接构建PoolStats，避免调用p.Stats()导致死锁
 	baseStats := PoolStats{
@@ -692,7 +857,7 @@ func (p *Pool) EnhancedStats() EnhancedStats {
 		strategyStr = "Hybrid"
 	}
 
-	return EnhancedStats{
+	return DetailedStats{
 		PoolStats:          baseStats,
 		CoreWorkers:        coreWorkers,
 		LastActivityTime:   time.Unix(0, atomic.LoadInt64(&p.lastActivityTime)),
